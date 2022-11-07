@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "graphql": "https://esm.sh/graphql@16.6.0",
+    "typescript": "https://raw.githubusercontent.com/ssttevee/deno-typescript/v1.27.0/mod.ts"
+  }
+}
