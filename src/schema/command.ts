@@ -1,4 +1,5 @@
 import { Command } from "https://deno.land/x/cliffy@v0.25.4/command/command.ts";
+import { parse as parseScalars } from "./scalars.ts";
 import { parse as parseSchema } from "./schema.ts";
 import { generate } from "./generate.ts";
 
@@ -19,7 +20,8 @@ export default new Command()
   .arguments("[schema:string]")
   .option("-o, --out <destination:string>", "Path to write schema_gen.ts.")
   .option("--graphql <module:string>", "graphql module import specifier.")
-  .action(async ({ out = "schema_gen.ts", graphql = "graphql" }, schema = ".") => {
+  .option("--scalars <module:string>", "scalars module import specifier.")
+  .action(async ({ out = "schema_gen.ts", graphql = "graphql", scalars }, schema = ".") => {
     const outfile = normalizePath(out);
     if (outfile.pathname.endsWith("/")) {
       outfile.pathname += "schema_gen.ts";
@@ -28,6 +30,7 @@ export default new Command()
     await Deno.writeTextFile(
       out,
       await generate(await parseSchema(normalizePath(schema)), out, {
+        scalarsInfo: scalars ? await parseScalars(normalizePath(scalars)) : undefined,
         graphqlModuleSpecifier: graphql,
       }),
     );

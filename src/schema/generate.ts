@@ -20,6 +20,7 @@ import { partition } from "https://deno.land/std@0.162.0/collections/partition.t
 import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e530bec1bda87bab4a0d4b923daa13/mod.ts";
 import { pascalCase } from "https://deno.land/x/case@2.1.1/mod.ts";
 import { format } from "../common/format.ts";
+import type { ScalarInfo, SymbolReference } from "./scalars.ts";
 
 function compareEntryKey(
   [a]: [string, ...any[]],
@@ -60,13 +61,14 @@ function importAlias(line: string): string {
 function renderImports(
   base: string,
   imports: Array<[string, Set<string>]>,
+  aliases: Record<string, string>,
 ): jen.Expr {
   return jen.statements(
     ...imports.map(([pkg, symbols]) =>
       jen.import.obj(
-        ...Array.from(symbols).sort((a, b) => a.localeCompare(b) || importAlias(a).localeCompare(importAlias(b))).map(
-          jen.id,
-        ),
+        ...Array.from(symbols)
+          .sort((a, b) => a.localeCompare(b) || importAlias(a).localeCompare(importAlias(b)))
+          .map((symbol) => symbol in aliases ? jen.id(aliases[symbol]).as.id(symbol) : jen.id(symbol)),
       ).from.lit(pkg.startsWith("/") ? path.relative(base, pkg) : pkg)
     ),
   );
@@ -85,12 +87,18 @@ function renderProp<T>(
   return [jen.prop(key as string, fn.call(thisArg, obj[key] as any))];
 }
 
+function renderSymbolReference(pkgs: RequiredPackages, ref: SymbolReference): jen.Expr {
+  const ns = (ref.module ? jen.id(pkgs.addRequires(ref.module, ref.symbol)) : jen.id(ref.symbol));
+  return ref.property ? ns.dot(ref.property) : ns;
+}
+
 class RequiredPackages {
   // map from symbol to module path
   private symbols: Record<string, string> = {};
+  public readonly aliases: Record<string, string> = {};
 
   constructor(
-    public requires: Record<string, Set<string>> = {},
+    public readonly requires: Record<string, Set<string>> = {},
   ) {
     for (const [pkg, symbols] of Object.entries(requires)) {
       for (const symbol of symbols) {
@@ -111,6 +119,9 @@ class RequiredPackages {
 
     this.requires[pkg].add(symbol);
     this.symbols[symbol] = pkg;
+    if (symbol !== name) {
+      this.aliases[symbol] = name;
+    }
     return symbol;
   }
 }
@@ -123,6 +134,7 @@ interface InterfaceImplementors {
 type Interfaces = Record<string, InterfaceImplementors>;
 
 interface GenerateOptions {
+  scalarsInfo?: Record<string, ScalarInfo>;
   graphqlModuleSpecifier?: string;
 }
 
@@ -130,9 +142,11 @@ class SchemaGenerator {
   private _pkgs: RequiredPackages;
   private _interfaces: Interfaces = {};
 
+  private _scalarsInfo: Record<string, ScalarInfo>;
   private _graphqlModuleSpecifier: string;
 
   private constructor(options: GenerateOptions = {}) {
+    this._scalarsInfo = options.scalarsInfo ?? {};
     this._graphqlModuleSpecifier = options.graphqlModuleSpecifier ?? "graphql";
     this._pkgs = new RequiredPackages();
   }
@@ -230,6 +244,11 @@ class SchemaGenerator {
       | GraphQLInterfaceType,
   ) {
     if (type instanceof GraphQLScalarType) {
+      const scalarType = this._findScalarType(type);
+      if (scalarType) {
+        return scalarType;
+      }
+
       switch (type.name) {
         case "ID":
           return "ID";
@@ -245,7 +264,7 @@ class SchemaGenerator {
           return "boolean";
       }
 
-      return type.name + "Scalar";
+      return "unknown";
     }
 
     if (type instanceof GraphQLEnumType) {
@@ -253,6 +272,30 @@ class SchemaGenerator {
     }
 
     return type.name;
+  }
+
+  private _scalarTypeTypeCache: Record<string, string | undefined> = {};
+
+  private _findScalarType(type: GraphQLScalarType): string | undefined {
+    if (type.name in this._scalarTypeTypeCache) {
+      return this._scalarTypeTypeCache[type.name];
+    }
+
+    let returnType: string | undefined;
+    const info = this._scalarsInfo[type.name];
+    if (info?.type) {
+      if (info.type.module) {
+        returnType = this._pkgs.addRequires(info.type.module, info.type.symbol);
+      }
+
+      returnType = info.type.symbol;
+    }
+
+    if (!returnType) {
+      console.log("WARNING: Could not determine scalar " + type.name + " type from parseValue or parseLiteral");
+    }
+
+    return (this._scalarTypeTypeCache[type.name] = returnType);
   }
 
   private _renderGraphQLTypeType(
@@ -264,32 +307,6 @@ class SchemaGenerator {
 
     if (type instanceof GraphQLList) {
       return jen.id("Array").types(this._renderOptionalGraphQLTypeType(type.ofType));
-    }
-
-    if (type instanceof GraphQLScalarType) {
-      // const configType = findScalarType(type.name);
-      // if (configType) {
-      //   return configType;
-      // }
-
-      switch (type.name) {
-        case "ID":
-          // TODO: make this configurable
-          return jen.union(jen.string, jen.number);
-
-        case "Int":
-        case "Float":
-          return jen.number;
-
-        case "String":
-          return jen.string;
-
-        case "Boolean":
-          return jen.boolean;
-      }
-
-      // TODO: add support for custom scalar types
-      return jen.unknown;
     }
 
     if (type instanceof GraphQLDirective) {
@@ -385,14 +402,33 @@ class SchemaGenerator {
   private _renderGraphQLScalarType(
     type: GraphQLScalarType,
   ): [jen.Expr, ...jen.Expr[]] {
+    const info = this._scalarsInfo[type.name];
     return [
       jen.new.add(this._gql("GraphQLScalarType")).call(
         jen.obj(
           ...renderProp(type, "name"),
           ...renderProp(type, "description"),
-          //   jen.comment("TODO: implement serialize"),
-          //   jen.comment("TODO: implement parseValue"),
-          //   jen.comment("TODO: implement parseLiteral"),
+          ...(
+            info?.serializeFunc
+              ? [
+                jen.prop("serialize", renderSymbolReference(this._pkgs, info.serializeFunc)),
+              ]
+              : []
+          ),
+          ...(
+            info?.parseValueFunc
+              ? [
+                jen.prop("parseValue", renderSymbolReference(this._pkgs, info.parseValueFunc)),
+              ]
+              : []
+          ),
+          ...(
+            info?.parseLiteralFunc
+              ? [
+                jen.prop("parseLiteral", renderSymbolReference(this._pkgs, info.parseLiteralFunc)),
+              ]
+              : []
+          ),
         ),
       ),
     ];
@@ -598,7 +634,7 @@ class SchemaGenerator {
       .filter(([, type]) => !type.name.startsWith("__") && !isPrimitiveType(type))
       .map(([, type]) => type);
 
-    const base = path.join(Deno.cwd(), outfile);
+    const base = outfile.startsWith("/") ? outfile : path.join(Deno.cwd(), outfile);
 
     const statements = [
       ...[
@@ -670,8 +706,8 @@ class SchemaGenerator {
     );
 
     return jen.statements(
-      renderImports(base, externalImports),
-      renderImports(base, localImports),
+      renderImports(path.dirname(base), externalImports, generator._pkgs.aliases),
+      renderImports(path.dirname(base), localImports, generator._pkgs.aliases),
       ...statements,
       jen.export.default.id("schema"),
     );
