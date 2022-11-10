@@ -93,8 +93,6 @@ interface InterfaceImplementors {
   implementors: GraphQLObjectType[];
 }
 
-type Interfaces = Record<string, InterfaceImplementors>;
-
 interface GenerateOptions {
   scalarsInfo?: Awaited<ReturnType<typeof import("./scalars.ts").parse>>;
   resolversInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parse>>;
@@ -104,7 +102,6 @@ interface GenerateOptions {
 
 class SchemaGenerator {
   private _pkgs: RequiredPackages;
-  private _interfaces: Interfaces = {};
 
   private _scalarsInfo: Exclude<GenerateOptions["scalarsInfo"], undefined>;
   private _resolversInfo: Exclude<GenerateOptions["resolversInfo"], undefined>;
@@ -335,18 +332,7 @@ class SchemaGenerator {
   private _renderGraphQLObjectType(
     type: GraphQLObjectType,
   ): [jen.Expr, ...jen.Expr[]] {
-    const typeInterfaces = Array.from(type.getInterfaces());
-    for (const iface of typeInterfaces) {
-      if (!(iface.name in this._interfaces)) {
-        this._interfaces[iface.name] = {
-          interface: iface,
-          implementors: [],
-        };
-      }
-
-      this._interfaces[iface.name].implementors.push(type);
-    }
-
+    const typeInterfaces = type.getInterfaces();
     const fieldsWithArgs = Object.values(type.getFields())
       .filter((field) => field.args.length)
       .sort(compareName);
@@ -363,7 +349,8 @@ class SchemaGenerator {
                 jen.prop(
                   "interfaces",
                   jen.arrow().arr(
-                    ...typeInterfaces.sort(compareName).map(
+                    // do not sort interfaces, the declaration order may be important
+                    ...typeInterfaces.map(
                       this._renderGraphQLTypeIdentifier,
                       this,
                     ),
@@ -482,7 +469,7 @@ class SchemaGenerator {
 
   private _renderGraphQLInterfaceType(
     type: GraphQLInterfaceType,
-    implementors: GraphQLObjectType[],
+    { implementors }: InterfaceImplementors,
   ): [jen.Expr, ...jen.Expr[]] {
     const [resolver, castFns] = this._renderTypeResolverAndCastFunctions(type, implementors, "interface");
     return [
@@ -510,7 +497,10 @@ class SchemaGenerator {
           ...renderProp(type, "name"),
           ...renderProp(type, "description"),
           jen.prop("resolveType", resolver),
-          jen.prop("types", jen.array(...type.getTypes().map((type) => this._renderGraphQLTypeIdentifier(type)))),
+          jen.prop(
+            "types",
+            jen.arrow().array(...type.getTypes().map((type) => this._renderGraphQLTypeIdentifier(type))),
+          ),
         ),
       ),
       jen.export.type.add(this._renderGraphQLTypeType(type)).op("=").union(
@@ -573,7 +563,7 @@ class SchemaGenerator {
     ];
   }
 
-  private _renderGraphQLType(type: GraphQLType): jen.Expr {
+  private _renderGraphQLType(type: GraphQLType, interfaces: Record<string, InterfaceImplementors>): jen.Expr {
     const renderFn = (
       type instanceof GraphQLObjectType
         ? this._renderGraphQLObjectType
@@ -594,7 +584,12 @@ class SchemaGenerator {
       throw new Error("unhandled type: " + type.toString());
     }
 
-    const [typeValue, ...extra] = (renderFn as any as (type: GraphQLType) => jen.Expr[]).call(this, type);
+    const [typeValue, ...extra] =
+      (renderFn as any as (type: GraphQLType, interfaces?: InterfaceImplementors) => jen.Expr[]).call(
+        this,
+        type,
+        interfaces[(type as { name: string }).name],
+      );
     return jen.statements(
       jen.const.add(this._renderGraphQLTypeIdentifier(type)).op("=").add(typeValue),
       ...extra,
@@ -626,37 +621,37 @@ class SchemaGenerator {
     outfile: string,
     options: GenerateOptions = {},
   ): jen.Expr {
-    const generator = new SchemaGenerator(options);
-
     const types = Object.entries(schema.getTypeMap())
       .sort(compareEntryKey)
       .filter(([, type]) => !type.name.startsWith("__") && !isPrimitiveType(type))
       .map(([, type]) => type);
 
+    const interfaces: Record<string, InterfaceImplementors> = {};
+    for (const type of types) {
+      if (!(type instanceof GraphQLObjectType)) {
+        continue;
+      }
+
+      for (const iface of type.getInterfaces()) {
+        if (!(iface.name in interfaces)) {
+          interfaces[iface.name] = {
+            interface: iface,
+            implementors: [],
+          };
+        }
+
+        interfaces[iface.name].implementors.push(type);
+      }
+    }
+
+    const generator = new SchemaGenerator(options);
+
     const base = outfile.startsWith("/") ? outfile : path.join(Deno.cwd(), outfile);
 
     const statements = [
       ...[
-        ...[
-          ...types
-            .filter((t) => !(t instanceof GraphQLInterfaceType || t instanceof GraphQLUnionType))
-            .map((type): [string, jen.Expr] => [type.name, generator._renderGraphQLType(type)]),
-
-          ...Object.values(generator._interfaces).map((i): [string, jen.Expr] => {
-            const [typeValue, ...extra] = generator._renderGraphQLInterfaceType(i.interface, i.implementors);
-            return [
-              i.interface.name,
-              jen.statements(
-                jen.const.add(generator._renderGraphQLTypeIdentifier(i.interface)).op("=").add(typeValue),
-                ...extra,
-              ),
-            ];
-          }),
-        ].sort(compareEntryKey),
-
         ...types
-          .filter((t) => t instanceof GraphQLUnionType)
-          .map((type): [string, jen.Expr] => [type.name, generator._renderGraphQLType(type)])
+          .map((type): [string, jen.Expr] => [type.name, generator._renderGraphQLType(type, interfaces)])
           .sort(compareEntryKey),
 
         ...schema.getDirectives()
