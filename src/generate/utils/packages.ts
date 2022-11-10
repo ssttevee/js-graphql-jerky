@@ -22,7 +22,11 @@ export class RequiredPackages {
 
     let symbol = name;
     if ((symbol in this.symbols || keywords.has(symbol)) && this.symbols[symbol] !== pkg) {
-      for (let i = 1; this.symbols[symbol = name + "$" + i] !== undefined; i++);
+      for (
+        let i = 1;
+        this.symbols[symbol = name + "$" + i] && this.symbols[symbol] !== pkg;
+        i++
+      );
     }
 
     this.requires[pkg].add(symbol);
