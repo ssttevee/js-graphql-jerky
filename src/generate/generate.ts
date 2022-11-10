@@ -88,6 +88,19 @@ function renderProp<T>(
   return [jen.prop(key as string, fn.call(thisArg, obj[key] as any))];
 }
 
+function isBuiltInDirective(name: string): boolean {
+  // https://spec.graphql.org/draft/#sec-Type-System.Directives.Built-in-Directives
+  switch (name) {
+    case "deprecated":
+    case "skip":
+    case "include":
+    case "specifiedBy":
+      return true;
+  }
+
+  return false;
+}
+
 interface InterfaceImplementors {
   interface: GraphQLInterfaceType;
   implementors: GraphQLObjectType[];
@@ -663,6 +676,7 @@ class SchemaGenerator {
           .sort(compareEntryKey),
 
         ...schema.getDirectives()
+          .filter((d) => !isBuiltInDirective(d.name))
           .map((directive): [string, jen.Expr] => [directive.name, generator._renderGraphQLDirective(directive)])
           .sort(compareEntryKey),
       ].map(([, expr]) => expr),
@@ -682,21 +696,7 @@ class SchemaGenerator {
           "directives",
           jen.array(
             ...Array.from(schema.getDirectives())
-              .filter((d) => {
-                switch (d.name) {
-                  /**
-                   * exclude built-in directives
-                   * @see https://spec.graphql.org/draft/#sec-Type-System.Directives.Built-in-Directives
-                   */
-                  case "deprecated":
-                  case "skip":
-                  case "include":
-                  case "specifiedBy":
-                    return false;
-                }
-
-                return true;
-              })
+              .filter((d) => !isBuiltInDirective(d.name))
               .map((d) => generator._renderGraphQLTypeIdentifier(d)),
           ),
         ),
