@@ -1,4 +1,4 @@
-import ts, { parseModule } from "../common/typescript.ts";
+import ts, { parseModule } from "./utils/typescript.ts";
 
 export interface SymbolReference {
   module?: string;

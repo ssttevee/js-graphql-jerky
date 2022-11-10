@@ -19,9 +19,9 @@ import * as path from "https://deno.land/std@0.161.0/path/mod.ts";
 import { partition } from "https://deno.land/std@0.162.0/collections/partition.ts";
 import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e530bec1bda87bab4a0d4b923daa13/mod.ts";
 import { pascalCase } from "https://deno.land/x/case@2.1.1/mod.ts";
-import { format } from "../common/format.ts";
-import { RequiredPackages } from "../common/packages.ts";
-import { renderSymbolReference } from "../common/reference.ts";
+import { format } from "./utils/format.ts";
+import { RequiredPackages } from "./utils/packages.ts";
+import { renderSymbolReference } from "./utils/reference.ts";
 
 function compareEntryKey(
   [a]: [string, ...any[]],

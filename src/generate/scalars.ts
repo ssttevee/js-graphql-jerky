@@ -1,5 +1,5 @@
-import ts, { parseModule } from "../common/typescript.ts";
-import { SymbolReference } from "../common/reference.ts";
+import ts, { parseModule } from "./utils/typescript.ts";
+import { SymbolReference } from "./utils/reference.ts";
 
 type FunctionDeclaration = ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction;
 

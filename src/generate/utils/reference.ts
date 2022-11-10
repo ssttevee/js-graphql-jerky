@@ -1,4 +1,4 @@
-import { RequiredPackages } from "../common/packages.ts";
+import { RequiredPackages } from "./packages.ts";
 import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e530bec1bda87bab4a0d4b923daa13/mod.ts";
 
 export interface SymbolReference {
