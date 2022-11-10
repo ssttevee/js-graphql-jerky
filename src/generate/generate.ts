@@ -75,19 +75,6 @@ function renderImports(
   );
 }
 
-function renderProp<T>(
-  obj: T,
-  key: keyof T,
-  fn: (value: any) => jen.Expr = jen.lit as any,
-  thisArg: any = {},
-): jen.Expr[] {
-  if (obj[key] === undefined || (Array.isArray(obj[key]) && !(obj[key] as any as unknown[]).length)) {
-    return [];
-  }
-
-  return [jen.prop(key as string, fn.call(thisArg, obj[key] as any))];
-}
-
 function isBuiltInDirective(name: string): boolean {
   // https://spec.graphql.org/draft/#sec-Type-System.Directives.Built-in-Directives
   switch (name) {
@@ -99,6 +86,10 @@ function isBuiltInDirective(name: string): boolean {
   }
 
   return false;
+}
+
+function truthify<T>(arr: Array<T | undefined | null | 0 | false | "">): T[] {
+  return arr.filter(Boolean) as T[];
 }
 
 interface InterfaceImplementors {
@@ -163,14 +154,16 @@ class SchemaGenerator {
     return jen.obj(
       ...Array.from(args)
         .sort(compareName)
-        .map((arg) =>
+        .map((arg: GraphQLArgument & { defaultValue?: any }) =>
           jen.prop(
             arg.name,
             jen.obj(
               jen.prop("type", this._renderGraphQLTypeIdentifier(arg.type)),
-              ...renderProp(arg, "description"),
-              ...renderProp(arg, "defaultValue"),
-              ...renderProp(arg, "deprecationReason"),
+              ...truthify([
+                arg.description && jen.prop("description", jen.lit(arg.description)),
+                arg.defaultValue && jen.prop("defaultValue", jen.lit(arg.defaultValue)),
+                arg.deprecationReason && jen.prop("deprecationReason", jen.lit(arg.deprecationReason)),
+              ]),
             ),
           )
         ),
@@ -179,7 +172,10 @@ class SchemaGenerator {
 
   private _renderFieldObject(
     type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
-    f: GraphQLInputField | GraphQLField<any, any>,
+    f:
+      & (GraphQLInputField | GraphQLField<any, any>)
+      & Partial<Pick<GraphQLField<any, any>, "args">>
+      & { defaultValue?: any },
   ): jen.Expr {
     let resolver = this._resolversInfo[type.name]?.[f.name];
     if (type instanceof GraphQLObjectType && !resolver) {
@@ -205,26 +201,17 @@ class SchemaGenerator {
 
     return jen.obj(
       jen.prop("type", this._renderGraphQLTypeIdentifier(f.type)),
-      ...renderProp(f as GraphQLField<any, any>, "args", this._renderArgumentsObject, this),
-      ...renderProp(f as GraphQLInputField, "defaultValue"),
-      ...renderProp(f, "description"),
-      ...renderProp(f, "deprecationReason"),
-      // NOTE: Resolver functions on interface definitions are not used by the default graphql-js
-      //       executor implementation, but nonetheless accessible by a potential alternate implementation.
-      ...(
-        (!(type instanceof GraphQLInputObjectType) && resolver)
-          ? [
-            jen.prop("resolve", renderSymbolReference(this._pkgs, resolver)),
-          ]
-          : []
-      ),
-      ...(
-        subscriber
-          ? [
-            jen.prop("subscribe", renderSymbolReference(this._pkgs, subscriber)),
-          ]
-          : []
-      ),
+      ...truthify([
+        f.args?.length && jen.prop("args", this._renderArgumentsObject(f.args)),
+        f.defaultValue && jen.prop("defaultValue", jen.lit(f.defaultValue)),
+        f.description && jen.prop("description", jen.lit(f.description)),
+        f.deprecationReason && jen.prop("deprecationReason", jen.lit(f.deprecationReason)),
+
+        // NOTE: Resolver functions on interface definitions are not used by the default graphql-js
+        //       executor implementation, but nonetheless accessible by a potential alternate implementation.
+        resolver && jen.prop("resolve", renderSymbolReference(this._pkgs, resolver)),
+        subscriber && jen.prop("subscribe", renderSymbolReference(this._pkgs, subscriber)),
+      ]),
     );
   }
 
@@ -361,25 +348,21 @@ class SchemaGenerator {
     return [
       jen.new.add(this._gql("GraphQLObjectType")).call(
         jen.obj(
-          ...renderProp(type, "name"),
-          ...renderProp(type, "description"),
+          jen.prop("name", jen.lit(type.name)),
           jen.prop("fields", this._renderFieldsThunk(type)),
-          ...(
-            typeInterfaces.length
-              ? [
-                jen.prop(
-                  "interfaces",
-                  jen.arrow().arr(
-                    // do not sort interfaces, the declaration order may be important
-                    ...typeInterfaces.map(
-                      this._renderGraphQLTypeIdentifier,
-                      this,
-                    ),
-                  ),
+          ...truthify([
+            type.description && jen.prop("description", jen.lit(type.description)),
+            typeInterfaces.length && jen.prop(
+              "interfaces",
+              jen.arrow().arr(
+                // do not sort interfaces, the declaration order may be important
+                ...typeInterfaces.map(
+                  this._renderGraphQLTypeIdentifier,
+                  this,
                 ),
-              ]
-              : []
-          ),
+              ),
+            ),
+          ]),
         ),
       ).as.add(this._gql("GraphQLObjectType")),
       jen.export.add(this._renderTypeInterface(type)),
@@ -409,33 +392,17 @@ class SchemaGenerator {
   private _renderGraphQLScalarType(
     type: GraphQLScalarType,
   ): [jen.Expr, ...jen.Expr[]] {
-    const info = this._scalarsInfo[type.name];
+    const s = this._scalarsInfo[type.name];
     return [
       jen.new.add(this._gql("GraphQLScalarType")).call(
         jen.obj(
-          ...renderProp(type, "name"),
-          ...renderProp(type, "description"),
-          ...(
-            info?.serializeFunc
-              ? [
-                jen.prop("serialize", renderSymbolReference(this._pkgs, info.serializeFunc)),
-              ]
-              : []
-          ),
-          ...(
-            info?.parseValueFunc
-              ? [
-                jen.prop("parseValue", renderSymbolReference(this._pkgs, info.parseValueFunc)),
-              ]
-              : []
-          ),
-          ...(
-            info?.parseLiteralFunc
-              ? [
-                jen.prop("parseLiteral", renderSymbolReference(this._pkgs, info.parseLiteralFunc)),
-              ]
-              : []
-          ),
+          jen.prop("name", jen.lit(type.name)),
+          ...truthify([
+            type.description && jen.prop("description", jen.lit(type.description)),
+            s?.serializeFunc && jen.prop("serialize", renderSymbolReference(this._pkgs, s.serializeFunc)),
+            s?.parseValueFunc && jen.prop("parseValue", renderSymbolReference(this._pkgs, s.parseValueFunc)),
+            s?.parseLiteralFunc && jen.prop("parseLiteral", renderSymbolReference(this._pkgs, s.parseLiteralFunc)),
+          ]),
         ),
       ),
     ];
@@ -496,10 +463,12 @@ class SchemaGenerator {
     return [
       jen.new.add(this._gql("GraphQLInterfaceType")).call(
         jen.obj(
-          ...renderProp(type, "name"),
-          ...renderProp(type, "description"),
+          jen.prop("name", jen.lit(type.name)),
           jen.prop("resolveType", resolver),
           jen.prop("fields", this._renderFieldsThunk(type)),
+          ...truthify([
+            type.description && jen.prop("description", jen.lit(type.description)),
+          ]),
         ),
       ).as.add(this._gql("GraphQLInterfaceType")),
       jen.export.add(this._renderTypeInterface(type)),
@@ -515,13 +484,15 @@ class SchemaGenerator {
     return [
       jen.new.add(this._gql("GraphQLUnionType")).call(
         jen.obj(
-          ...renderProp(type, "name"),
-          ...renderProp(type, "description"),
+          jen.prop("name", jen.lit(type.name)),
           jen.prop("resolveType", resolver),
           jen.prop(
             "types",
             jen.arrow().array(...type.getTypes().map((type) => this._renderGraphQLTypeIdentifier(type))),
           ),
+          ...truthify([
+            type.description && jen.prop("description", jen.lit(type.description)),
+          ]),
         ),
       ),
       jen.export.type.add(this._renderGraphQLTypeType(type)).op("=").union(
@@ -535,9 +506,11 @@ class SchemaGenerator {
     return [
       jen.new.add(this._gql("GraphQLInputObjectType")).call(
         jen.obj(
-          ...renderProp(type, "name"),
-          ...renderProp(type, "description"),
+          jen.prop("name", jen.lit(type.name)),
           jen.prop("fields", this._renderFieldsThunk(type)),
+          ...truthify([
+            type.description && jen.prop("description", jen.lit(type.description)),
+          ]),
         ),
       ),
       jen.export.interface.add(this._renderGraphQLTypeType(type)).block(
@@ -554,22 +527,16 @@ class SchemaGenerator {
     return [
       jen.new.add(this._gql("GraphQLEnumType")).call(
         jen.obj(
-          ...renderProp(type, "name"),
-          ...renderProp(type, "description"),
+          jen.prop("name", jen.lit(type.name)),
           jen.prop(
             "values",
             jen.obj(
-              ...sortedValues.map(
-                ({ name, value }) =>
-                  jen.prop(
-                    name,
-                    jen.obj(
-                      jen.prop("value", jen.lit(value)),
-                    ),
-                  ),
-              ),
+              ...sortedValues.map(({ name, value }) => jen.prop(name, jen.obj(jen.prop("value", jen.lit(value))))),
             ),
           ),
+          ...truthify([
+            type.description && jen.prop("description", jen.lit(type.description)),
+          ]),
         ),
       ),
       jen.export.enum.add(this._renderGraphQLTypeType(type)).obj(
@@ -621,8 +588,7 @@ class SchemaGenerator {
     return jen.const.add(this._renderGraphQLTypeIdentifier(directive)).op("=").new.add(this._gql("GraphQLDirective"))
       .call(
         jen.obj(
-          ...renderProp(directive, "name"),
-          ...renderProp(directive, "description"),
+          jen.prop("name", jen.lit(directive.name)),
           jen.prop(
             "locations",
             jen.array(
@@ -632,7 +598,10 @@ class SchemaGenerator {
             ),
           ),
           jen.prop("args", this._renderArgumentsObject(directive.args)),
-          ...renderProp(directive, "isRepeatable"),
+          ...truthify([
+            directive.description && jen.prop("description", jen.lit(directive.description)),
+            directive.isRepeatable && jen.prop("isRepeatable", jen.true),
+          ]),
         ),
       );
   }
