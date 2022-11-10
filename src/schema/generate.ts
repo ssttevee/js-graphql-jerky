@@ -20,7 +20,8 @@ import { partition } from "https://deno.land/std@0.162.0/collections/partition.t
 import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e530bec1bda87bab4a0d4b923daa13/mod.ts";
 import { pascalCase } from "https://deno.land/x/case@2.1.1/mod.ts";
 import { format } from "../common/format.ts";
-import type { ScalarInfo, SymbolReference } from "./scalars.ts";
+import { RequiredPackages } from "../common/packages.ts";
+import { renderSymbolReference } from "../common/reference.ts";
 
 function compareEntryKey(
   [a]: [string, ...any[]],
@@ -87,45 +88,6 @@ function renderProp<T>(
   return [jen.prop(key as string, fn.call(thisArg, obj[key] as any))];
 }
 
-function renderSymbolReference(pkgs: RequiredPackages, ref: SymbolReference): jen.Expr {
-  const ns = (ref.module ? jen.id(pkgs.addRequires(ref.module, ref.symbol)) : jen.id(ref.symbol));
-  return ref.property ? ns.dot(ref.property) : ns;
-}
-
-class RequiredPackages {
-  // map from symbol to module path
-  private symbols: Record<string, string> = {};
-  public readonly aliases: Record<string, string> = {};
-
-  constructor(
-    public readonly requires: Record<string, Set<string>> = {},
-  ) {
-    for (const [pkg, symbols] of Object.entries(requires)) {
-      for (const symbol of symbols) {
-        this.symbols[symbol] = pkg;
-      }
-    }
-  }
-
-  public addRequires(pkg: string, name: string) {
-    if (!(pkg in this.requires)) {
-      this.requires[pkg] = new Set();
-    }
-
-    let symbol = name;
-    if (symbol in this.symbols && this.symbols[symbol] !== pkg) {
-      for (let i = 1; this.symbols[symbol = name + "$" + i] !== undefined; i++);
-    }
-
-    this.requires[pkg].add(symbol);
-    this.symbols[symbol] = pkg;
-    if (symbol !== name) {
-      this.aliases[symbol] = name;
-    }
-    return symbol;
-  }
-}
-
 interface InterfaceImplementors {
   interface: GraphQLInterfaceType;
   implementors: GraphQLObjectType[];
@@ -134,7 +96,9 @@ interface InterfaceImplementors {
 type Interfaces = Record<string, InterfaceImplementors>;
 
 interface GenerateOptions {
-  scalarsInfo?: Record<string, ScalarInfo>;
+  scalarsInfo?: Awaited<ReturnType<typeof import("./scalars.ts").parse>>;
+  resolversInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parse>>;
+  subscribersInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
   graphqlModuleSpecifier?: string;
 }
 
@@ -142,11 +106,15 @@ class SchemaGenerator {
   private _pkgs: RequiredPackages;
   private _interfaces: Interfaces = {};
 
-  private _scalarsInfo: Record<string, ScalarInfo>;
+  private _scalarsInfo: Exclude<GenerateOptions["scalarsInfo"], undefined>;
+  private _resolversInfo: Exclude<GenerateOptions["resolversInfo"], undefined>;
+  private _subscribersInfo: Exclude<GenerateOptions["subscribersInfo"], undefined>;
   private _graphqlModuleSpecifier: string;
 
   private constructor(options: GenerateOptions = {}) {
     this._scalarsInfo = options.scalarsInfo ?? {};
+    this._resolversInfo = options.resolversInfo ?? {};
+    this._subscribersInfo = options.subscribersInfo ?? {};
     this._graphqlModuleSpecifier = options.graphqlModuleSpecifier ?? "graphql";
     this._pkgs = new RequiredPackages();
   }
@@ -200,14 +168,45 @@ class SchemaGenerator {
   }
 
   private _renderFieldObject(
+    type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
     f: GraphQLInputField | GraphQLField<any, any>,
   ): jen.Expr {
+    const resolver = this._resolversInfo[type.name]?.[f.name];
+
+    // NOTE: The way subscribers work in the graphql-js is by calling `subscribe` on the top level fields (and only on
+    //       Subscription), and then calling `resolve` on the nested fields. This means that subscribers only need to be
+    //       defined on `Query`.
+    //
+    //       In theory, an alternate implementation could be created to call `subscribe` at every level, but considering
+    //       how subscribe functions work, it would be unclear how it would make sense.
+    //
+    //       If you ever need such functionality, please open an issue and it can be discussed.
+    //
+    //       @see https://github.com/graphql/graphql-js/blob/e9a81f2ba9020ec5fd0f67f5553ccabe392e95e8/src/execution/execute.ts#L1645
+    const subscriber = type.name === "Subscription" ? this._subscribersInfo[f.name] : undefined;
+
     return jen.obj(
       jen.prop("type", this._renderGraphQLTypeIdentifier(f.type)),
       ...renderProp(f as GraphQLField<any, any>, "args", this._renderArgumentsObject, this),
       ...renderProp(f as GraphQLInputField, "defaultValue"),
       ...renderProp(f, "description"),
       ...renderProp(f, "deprecationReason"),
+      // NOTE: Resolver functions on interface definitions are not used by the default graphql-js
+      //       executor implementation, but nonetheless accessible by a potential alternate implementation.
+      ...(
+        (!(type instanceof GraphQLInputObjectType) && resolver)
+          ? [
+            jen.prop("resolve", renderSymbolReference(this._pkgs, resolver)),
+          ]
+          : []
+      ),
+      ...(
+        subscriber
+          ? [
+            jen.prop("subscribe", renderSymbolReference(this._pkgs, subscriber)),
+          ]
+          : []
+      ),
     );
   }
 
@@ -217,7 +216,7 @@ class SchemaGenerator {
     return jen.arrow().parens(jen.obj(
       ...Object.values(type.getFields())
         .sort(compareName)
-        .map((field) => jen.prop(field.name, this._renderFieldObject(field))),
+        .map((field) => jen.prop(field.name, this._renderFieldObject(type, field))),
     ));
   }
 
@@ -642,6 +641,7 @@ class SchemaGenerator {
           ...types
             .filter((t) => !(t instanceof GraphQLInterfaceType || t instanceof GraphQLUnionType))
             .map((type): [string, jen.Expr] => [type.name, generator._renderGraphQLType(type)]),
+
           ...Object.values(generator._interfaces).map((i): [string, jen.Expr] => {
             const [typeValue, ...extra] = generator._renderGraphQLInterfaceType(i.interface, i.implementors);
             return [

@@ -87,7 +87,7 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
         Object.assign(
           exports,
           await findExports(
-            await resolveModuleFn(node.moduleSpecifier.getText(source), new URL(source.fileName)),
+            await resolveModuleFn(node.moduleSpecifier.text, new URL(source.fileName)),
             resolveModuleFn,
           ),
         );
@@ -219,3 +219,12 @@ export async function parseModule(path: URL): Promise<Module> {
 }
 
 export default ts;
+
+/**
+ * NOTE: this is an internal value in the TypeScript compiler
+ *
+ * @see https://github.com/microsoft/TypeScript/blob/0d0a79371471d627ae298a145f8009b05cbccb72/src/compiler/scanner.ts#L81
+ */
+export const keywords = new Set(Object.keys(
+  (ts as any).textToKeywordObj as Record<string, ts.SyntaxKind>,
+));

@@ -1,10 +1,5 @@
 import ts, { parseModule } from "../common/typescript.ts";
-
-export interface SymbolReference {
-  module?: string;
-  symbol: string;
-  property?: string;
-}
+import { SymbolReference } from "../common/reference.ts";
 
 type FunctionDeclaration = ts.MethodDeclaration | ts.FunctionExpression | ts.ArrowFunction;
 
