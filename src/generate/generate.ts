@@ -168,7 +168,15 @@ class SchemaGenerator {
     type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
     f: GraphQLInputField | GraphQLField<any, any>,
   ): jen.Expr {
-    const resolver = this._resolversInfo[type.name]?.[f.name];
+    let resolver = this._resolversInfo[type.name]?.[f.name];
+    if (type instanceof GraphQLObjectType && !resolver) {
+      // try to find resolver in interface in the declaration order
+      for (const iface of type.getInterfaces()) {
+        if ((resolver = this._resolversInfo[iface.name]?.[f.name])) {
+          break;
+        }
+      }
+    }
 
     // NOTE: The way subscribers work in the graphql-js is by calling `subscribe` on the top level fields (and only on
     //       Subscription), and then calling `resolve` on the nested fields. This means that subscribers only need to be
