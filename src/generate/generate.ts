@@ -738,7 +738,19 @@ class SchemaGenerator {
           jen.prop(
             "values",
             jen.obj(
-              ...sortedValues.map(({ name, value }) => jen.prop(name, jen.obj(jen.prop("value", jen.lit(value))))),
+              ...sortedValues.map(
+                (e) =>
+                  jen.prop(
+                    e.name,
+                    jen.obj(
+                      jen.prop("value", jen.lit(e.value)),
+                      ...truthify([
+                        e.description && jen.prop("description", jen.lit(e.description)),
+                        e.deprecationReason && jen.prop("deprecationReason", jen.lit(e.deprecationReason)),
+                      ]),
+                    ),
+                  ),
+              ),
             ),
           ),
           ...truthify([
