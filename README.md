@@ -155,21 +155,60 @@ The `--field-directives` option specifies the module from which field directive 
 
 Field directive functions work like middleware for field resolvers. They receive a field resolver function and return a
 field resolver function. The function that is returned may be a completely new function, or same function that was
-passed in as the parameter.
+passed in as the parameter. They are invoked once on start, and never again.
 
-For example, a directive that ensures that only authorized users may access a field may look like this:
+For example, a field directive that ensures that only authorized users may access a field may look like this:
+
+```graphql
+directive @secure(level: Int!) on FIELD_DEFINITION
+
+type Mutation {
+  secrets(): String @secure(level: 9001)
+}
+```
 
 ```js
-export function secure(next: GraphQLFieldResolver<any, any>, {}: SecureDirectiveArgs): GraphQLFieldResolver<any, any> {
+export function secure(next: GraphQLFieldResolver<any, any>, { level }: SecureDirectiveArgs): GraphQLFieldResolver<any, any> {
   return (src: any, args: any, ctx: any, info: GraphQLResolveInfo) => {
     if (!ctx.authorization) {
       throw new GraphQLError("unauthorized");
+    }
+
+    if (level > ctx.authorization.level) {
+      throw new GraphQLError(`authorization level ${level} is required`);
     }
 
     // src, args, ctx can be mutated here before being passed to the next resolver
 
     return next(src, args, ctx, info);
   }
+}
+```
+
+#### --input-directives
+
+The `--input-directives` option specifies the module from which input and argument directive functions are imported.
+
+Input and argument directive functions work like transforms. They receive a value, do some processing with it, and
+return a value to be used in place of the original value. They are invoked every time such a value is received.
+
+For example, an input directive that requires a value to be an email address may look like this:
+
+```graphql
+directive @email on ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION
+
+type Mutation {
+  sendMessage(to: String! @email): String
+}
+```
+
+```js
+export function email(s: string, {}: EmailDirectiveArgs): string {
+  if (!s.includes("@")) {
+    throw new Error("must be a valid email");
+  }
+
+  return s;
 }
 ```
 

@@ -1,5 +1,8 @@
 import {
+  ConstArgumentNode,
   DirectiveLocation,
+  getNamedType,
+  getNullableType,
   GraphQLArgument,
   GraphQLDirective,
   GraphQLEnumType,
@@ -24,7 +27,7 @@ import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e
 import { pascalCase } from "https://deno.land/x/case@2.1.1/mod.ts";
 import { format } from "./utils/format.ts";
 import { RequiredPackages } from "./utils/packages.ts";
-import { renderSymbolReference } from "./utils/reference.ts";
+import { renderSymbolReference, SymbolReference } from "./utils/reference.ts";
 
 function compareEntryKey(
   [a]: [string, ...any[]],
@@ -103,9 +106,15 @@ interface InterfaceImplementors {
 export interface GenerateOptions {
   scalarsInfo?: Awaited<ReturnType<typeof import("./scalars.ts").parse>>;
   fieldDirectivesInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
+  inputDirectivesInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
   resolversInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parse>>;
   subscribersInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
   graphqlModuleSpecifier?: string;
+}
+
+interface TypeRenderContext {
+  implementors: InterfaceImplementors;
+  inputFieldDirectives: Record<string, Record<string, string[]>>;
 }
 
 class SchemaGenerator {
@@ -113,6 +122,7 @@ class SchemaGenerator {
 
   private _scalarsInfo: Exclude<GenerateOptions["scalarsInfo"], undefined>;
   private _fieldDirectivesInfo: Exclude<GenerateOptions["fieldDirectivesInfo"], undefined>;
+  private _inputDirectivesInfo: Exclude<GenerateOptions["inputDirectivesInfo"], undefined>;
   private _resolversInfo: Exclude<GenerateOptions["resolversInfo"], undefined>;
   private _subscribersInfo: Exclude<GenerateOptions["subscribersInfo"], undefined>;
   private _graphqlModuleSpecifier: string;
@@ -120,6 +130,7 @@ class SchemaGenerator {
   private constructor(options: GenerateOptions = {}) {
     this._scalarsInfo = options.scalarsInfo ?? {};
     this._fieldDirectivesInfo = options.fieldDirectivesInfo ?? {};
+    this._inputDirectivesInfo = options.inputDirectivesInfo ?? {};
     this._resolversInfo = options.resolversInfo ?? {};
     this._subscribersInfo = options.subscribersInfo ?? {};
     this._graphqlModuleSpecifier = options.graphqlModuleSpecifier ?? "graphql";
@@ -202,12 +213,22 @@ class SchemaGenerator {
     throw new Error(`unexpected value kind: ${node.kind}`);
   }
 
+  private _renderArgumentNodes(nodes: readonly ConstArgumentNode[] | undefined): jen.Expr {
+    return jen.obj(
+      ...Array.from(
+        nodes ?? [],
+        (arg) => jen.prop(arg.name.value, this._renderValueNode(arg.value)),
+      ),
+    );
+  }
+
   private _renderFieldObject(
     type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
     f:
       & (GraphQLInputField | GraphQLField<any, any>)
       & Partial<Pick<GraphQLField<any, any>, "args">>
       & { defaultValue?: any },
+    inputFieldDirectives: Record<string, Record<string, string[]>>,
   ): jen.Expr {
     let resolver = this._resolversInfo[type.name]?.[f.name];
     if (type instanceof GraphQLObjectType && !resolver) {
@@ -234,13 +255,35 @@ class SchemaGenerator {
 
         resolveFn = renderSymbolReference(this._pkgs, ref).call(
           resolveFn,
-          jen.obj(
-            ...Array.from(
-              directive.arguments ?? [],
-              (arg) => jen.prop(arg.name.value, this._renderValueNode(arg.value)),
-            ),
-          ),
+          this._renderArgumentNodes(directive.arguments),
         );
+      }
+    }
+
+    if (resolveFn) {
+      // args probably don't need to be transformed if there's no resolver
+      const argsWithDirectives = truthify(
+        f.args?.map((arg) => this._findInputDirectiveInfoFromArgOrField(arg, inputFieldDirectives)) ?? [],
+      );
+      if (type.name === "Mutation" && f.name === "inviteMembers") {
+        console.log(f.args?.map((arg) => arg.astNode));
+      }
+      if (argsWithDirectives.length) {
+        resolveFn = jen.parens(
+          jen.params(jen.prop("next", this._gql("GraphQLFieldResolver").types(jen.any, jen.any))).op(":")
+            .add(this._gql("GraphQLFieldResolver"))
+            .types(jen.any, jen.any, jen.id(type.name).dot(pascalCase(f.name + "_args")))
+            .op("=>").arrow(jen.id("source"), jen.id("args"), jen.id("context"), jen.id("info")).id("next").call(
+              jen.id("source"),
+              this._renderInputFieldsWithDirectives(
+                jen.id("args"),
+                argsWithDirectives,
+                argsWithDirectives.length < f.args!.length,
+              ),
+              jen.id("context"),
+              jen.id("info"),
+            ),
+        ).call(resolveFn);
       }
     }
 
@@ -274,11 +317,12 @@ class SchemaGenerator {
 
   private _renderFieldsThunk(
     type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
+    inputFieldDirectives: Record<string, Record<string, string[]>>,
   ): jen.Expr {
     return jen.arrow().parens(jen.obj(
       ...Object.values(type.getFields())
         .sort(compareName)
-        .map((field) => jen.prop(field.name, this._renderFieldObject(type, field))),
+        .map((field) => jen.prop(field.name, this._renderFieldObject(type, field, inputFieldDirectives))),
     ));
   }
 
@@ -396,6 +440,7 @@ class SchemaGenerator {
 
   private _renderGraphQLObjectType(
     type: GraphQLObjectType,
+    { inputFieldDirectives }: TypeRenderContext,
   ): [jen.Expr, ...jen.Expr[]] {
     const typeInterfaces = type.getInterfaces();
     const fieldsWithArgs = Object.values(type.getFields())
@@ -406,7 +451,7 @@ class SchemaGenerator {
       jen.new.add(this._gql("GraphQLObjectType")).call(
         jen.obj(
           jen.prop("name", jen.lit(type.name)),
-          jen.prop("fields", this._renderFieldsThunk(type)),
+          jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
           ...truthify([
             type.description && jen.prop("description", jen.lit(type.description)),
             typeInterfaces.length && jen.prop(
@@ -514,7 +559,7 @@ class SchemaGenerator {
 
   private _renderGraphQLInterfaceType(
     type: GraphQLInterfaceType,
-    { implementors }: InterfaceImplementors,
+    { implementors: { implementors }, inputFieldDirectives }: TypeRenderContext,
   ): [jen.Expr, ...jen.Expr[]] {
     const [resolver, castFns] = this._renderTypeResolverAndCastFunctions(type, implementors, "interface");
     return [
@@ -522,7 +567,7 @@ class SchemaGenerator {
         jen.obj(
           jen.prop("name", jen.lit(type.name)),
           jen.prop("resolveType", resolver),
-          jen.prop("fields", this._renderFieldsThunk(type)),
+          jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
           ...truthify([
             type.description && jen.prop("description", jen.lit(type.description)),
           ]),
@@ -559,12 +604,102 @@ class SchemaGenerator {
     ];
   }
 
-  private _renderGraphQLInputObjectType(type: GraphQLInputObjectType): [jen.Expr, ...jen.Expr[]] {
+  private _findInputDirectiveInfoFromArgOrField(
+    field: GraphQLArgument | GraphQLInputField,
+    inputFieldDirectives: Record<string, Record<string, string[]>>,
+  ) {
+    const fieldTypeName = getNamedType(field.type).name;
+    let transform: SymbolReference | undefined;
+    if (inputFieldDirectives[fieldTypeName] && Object.keys(inputFieldDirectives[fieldTypeName]).length) {
+      transform = {
+        symbol: "transform" + fieldTypeName,
+      };
+    }
+
+    if (field.astNode?.directives?.length) {
+      const directives = field.astNode.directives.flatMap((directive) => {
+        const ref = this._inputDirectivesInfo[directive.name.value];
+        if (!ref) {
+          return [];
+        }
+
+        return [{ ref, args: directive.arguments }];
+      });
+
+      if (directives.length) {
+        return { field, directives: directives, transform };
+      }
+    }
+
+    if (transform) {
+      return { field, directives: [], transform };
+    }
+  }
+
+  private _renderInputFieldsWithDirectives(
+    valueExpr: jen.Expr,
+    fieldsWithDirectives: Exclude<ReturnType<typeof this._findInputDirectiveInfoFromArgOrField>, undefined>[],
+    spread: boolean,
+  ) {
+    return jen.obj(
+      ...truthify([
+        spread && jen.spread(valueExpr),
+      ]),
+      ...fieldsWithDirectives.map(({ field, directives, transform }) => {
+        const fieldExpr = valueExpr.dot(field.name);
+        const nullableType = getNullableType(field.type);
+        let transformedExpr: jen.Expr;
+        if (nullableType instanceof GraphQLList) {
+          transformedExpr = jen.id("elem");
+        } else {
+          transformedExpr = fieldExpr;
+        }
+
+        if (transform) {
+          transformedExpr = renderSymbolReference(this._pkgs, transform).call(transformedExpr);
+        }
+
+        for (const { ref, args } of directives) {
+          transformedExpr = renderSymbolReference(this._pkgs, ref).call(
+            transformedExpr,
+            this._renderArgumentNodes(args),
+          );
+        }
+
+        if (nullableType instanceof GraphQLList) {
+          transformedExpr = jen.id("Array").dot("from").call(
+            valueExpr.dot(field.name),
+            jen.arrow(jen.id("elem")).add(transformedExpr),
+          );
+
+          if (!(field.type instanceof GraphQLNonNull)) {
+            transformedExpr = jen.cond(
+              valueExpr.dot(field.name).op("===").null.op("||").add(valueExpr).dot(field.name).op("===").undefined,
+              jen.undefined,
+              transformedExpr,
+            );
+          }
+        }
+
+        return jen.prop(field.name, transformedExpr);
+      }),
+    );
+  }
+
+  private _renderGraphQLInputObjectType(
+    type: GraphQLInputObjectType,
+    { inputFieldDirectives }: TypeRenderContext,
+  ): [jen.Expr, ...jen.Expr[]] {
+    const fieldsWithDirectives = truthify(
+      Object.values(type.getFields())
+        .map((f) => this._findInputDirectiveInfoFromArgOrField(f, inputFieldDirectives)),
+    );
+
     return [
       jen.new.add(this._gql("GraphQLInputObjectType")).call(
         jen.obj(
           jen.prop("name", jen.lit(type.name)),
-          jen.prop("fields", this._renderFieldsThunk(type)),
+          jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
           ...truthify([
             type.description && jen.prop("description", jen.lit(type.description)),
           ]),
@@ -575,6 +710,21 @@ class SchemaGenerator {
           .sort(compareName)
           .map((field) => jen.prop(field.name, this._renderOptionalGraphQLTypeType(field.type))),
       ),
+      ...truthify([
+        fieldsWithDirectives.length &&
+        jen.const.id("transform" + this._deriveGraphQLTypeName(type)).op("=").types(
+          jen.id("T").extends.union(jen.id(type.name), jen.undefined),
+        ).params(
+          jen.prop("v", jen.id("T")),
+        )
+          .op(":").id("T").op("=>").parens(
+            jen.id("v").op("&&").add(this._renderInputFieldsWithDirectives(
+              jen.id("v"),
+              fieldsWithDirectives,
+              fieldsWithDirectives.length < Object.keys(type.getFields()).length,
+            )),
+          ),
+      ]),
     ];
   }
 
@@ -608,7 +758,11 @@ class SchemaGenerator {
     ];
   }
 
-  private _renderGraphQLType(type: GraphQLType, interfaces: Record<string, InterfaceImplementors>): jen.Expr {
+  private _renderGraphQLType(
+    type: GraphQLType,
+    interfaces: Record<string, InterfaceImplementors>,
+    inputFieldDirectives: Record<string, Record<string, string[]>>,
+  ): jen.Expr {
     const renderFn = (
       type instanceof GraphQLObjectType
         ? this._renderGraphQLObjectType
@@ -629,12 +783,17 @@ class SchemaGenerator {
       throw new Error("unhandled type: " + type.toString());
     }
 
-    const [typeValue, ...extra] =
-      (renderFn as any as (type: GraphQLType, interfaces?: InterfaceImplementors) => jen.Expr[]).call(
-        this,
-        type,
-        interfaces[(type as { name: string }).name],
-      );
+    const [typeValue, ...extra] = (renderFn as any as (
+      type: GraphQLType,
+      ctx: TypeRenderContext,
+    ) => jen.Expr[]).call(
+      this,
+      type,
+      {
+        implementors: interfaces[(type as { name: string }).name],
+        inputFieldDirectives,
+      },
+    );
     return jen.statements(
       jen.const.add(this._renderGraphQLTypeIdentifier(type)).op("=").add(typeValue),
       ...extra,
@@ -704,6 +863,56 @@ class SchemaGenerator {
       .filter(([, type]) => !type.name.startsWith("__") && !isPrimitiveType(type))
       .map(([, type]) => type);
 
+    const inputFieldDirectives: Record<string, Record<string, string[]>> = {};
+    if (options.inputDirectivesInfo) {
+      // input field directives not needed if the module was not specified
+      let typesWithObjectFields = new Array<[string, string, string]>();
+      for (const type of types) {
+        if (!(type instanceof GraphQLInputObjectType)) {
+          continue;
+        }
+
+        for (const field of Object.values(type.getFields())) {
+          if (getNamedType(field.type) instanceof GraphQLInputObjectType) {
+            typesWithObjectFields.push([type.name, field.name, getNamedType(field.type).name]);
+          }
+
+          const directives = field.astNode?.directives;
+          if (!directives) {
+            continue;
+          }
+
+          for (const directive of directives) {
+            const name = directive.name.value;
+            if (!options.inputDirectivesInfo[name]) {
+              continue;
+            }
+
+            const fieldDirectives = inputFieldDirectives[type.name] ?? (inputFieldDirectives[type.name] = {});
+            const fieldDirective = fieldDirectives[field.name] ?? (fieldDirectives[field.name] = []);
+            fieldDirective.push(name);
+          }
+        }
+      }
+
+      for (let changes = 1; changes; changes = 0) {
+        const newTypesWithObjectFields = new Array<[string, string, string]>();
+        for (const [typeName, fieldName, objectTypeName] of typesWithObjectFields) {
+          console.log(`checking ${typeName}.${fieldName} for ${objectTypeName}`);
+          if (inputFieldDirectives[objectTypeName]) {
+            inputFieldDirectives[typeName] = { ...inputFieldDirectives[typeName], [fieldName]: [] };
+            changes += 1;
+          } else {
+            newTypesWithObjectFields.push([typeName, fieldName, objectTypeName]);
+          }
+        }
+
+        typesWithObjectFields = newTypesWithObjectFields;
+      }
+
+      console.log(inputFieldDirectives["InviteMembersInput"], inputFieldDirectives["MemberInvitationInput"]);
+    }
+
     const interfaces: Record<string, InterfaceImplementors> = {};
     for (const type of types) {
       if (!(type instanceof GraphQLObjectType)) {
@@ -729,7 +938,9 @@ class SchemaGenerator {
     const statements = [
       ...[
         ...types
-          .map((type): [string, jen.Expr] => [type.name, generator._renderGraphQLType(type, interfaces)])
+          .map((
+            type,
+          ): [string, jen.Expr] => [type.name, generator._renderGraphQLType(type, interfaces, inputFieldDirectives)])
           .sort(compareEntryKey),
 
         ...schema.getDirectives()

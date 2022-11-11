@@ -18,7 +18,15 @@ function normalizePath(path: string): URL {
 
 const {
   args: [schema = "."],
-  options: { out = "schema_gen.ts", graphql = "graphql", scalars, resolvers, subscribers, fieldDirectives },
+  options: {
+    out = "schema_gen.ts",
+    graphql = "graphql",
+    scalars,
+    resolvers,
+    subscribers,
+    fieldDirectives,
+    inputDirectives,
+  },
 } = await new Command()
   .name("jerky")
   .version("0.1.0")
@@ -30,6 +38,7 @@ const {
   .option("--resolvers <directory:string>", "resolvers directory path.")
   .option("--subscribers <module:string>", "subscriber module import specifier.")
   .option("--field-directives <module:string>", "field directives module import specifier.")
+  .option("--input-directives <module:string>", "input directives module import specifier.")
   .parse(Deno.args);
 
 const outfile = normalizePath(out);
@@ -42,6 +51,7 @@ await Deno.writeTextFile(
   await generate(await parseSchema(normalizePath(schema)), out, {
     scalarsInfo: scalars ? await parseScalars(normalizePath(scalars)) : undefined,
     fieldDirectivesInfo: fieldDirectives ? await parseTypeResolvers("", normalizePath(fieldDirectives)) : undefined,
+    inputDirectivesInfo: inputDirectives ? await parseTypeResolvers("", normalizePath(inputDirectives)) : undefined,
     resolversInfo: resolvers ? await parseResolvers(normalizePath(resolvers)) : undefined,
     subscribersInfo: subscribers ? await parseTypeResolvers("Subscription", normalizePath(subscribers)) : undefined,
     graphqlModuleSpecifier: graphql,

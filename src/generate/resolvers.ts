@@ -1,10 +1,5 @@
+import { SymbolReference } from "./utils/reference.ts";
 import ts, { parseModule } from "./utils/typescript.ts";
-
-export interface SymbolReference {
-  module?: string;
-  symbol: string;
-  property?: string;
-}
 
 async function parseResolverFile(path: URL): Promise<Record<string, SymbolReference>> {
   return Object.fromEntries(
