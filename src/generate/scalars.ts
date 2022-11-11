@@ -111,7 +111,7 @@ function scalarInfoFromObjectLiteralExpression(
               return [[
                 `${prop.name.text}Func`,
                 {
-                  module: module.pathname,
+                  module: module.toString(),
                   symbol: scalarName,
                   property: prop.name.text,
                   declaration: prop.initializer,
@@ -133,7 +133,7 @@ function scalarInfoFromObjectLiteralExpression(
               return [[
                 `${prop.name.text}Func`,
                 {
-                  module: module.pathname,
+                  module: module.toString(),
                   symbol: scalarName,
                   property: prop.name.text,
                   declaration: prop,
@@ -170,7 +170,7 @@ function scalarInfoFromObjectLiteralExpression(
   info.type = parseValueReturnType || parseLiteralReturnType;
   if (info.type?.module?.startsWith(".")) {
     info.type = {
-      module: new URL(info.type.module, module).pathname,
+      module: new URL(info.type.module, module).toString(),
       symbol: info.type.symbol,
       property: info.type.property,
     };

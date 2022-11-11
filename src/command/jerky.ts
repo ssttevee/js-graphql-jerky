@@ -5,8 +5,10 @@ import { parse as parseResolvers, parseTypeResolvers } from "../generate/resolve
 import { generate } from "../generate/generate.ts";
 
 function normalizePath(path: string): URL {
-  if (path.startsWith("file://")) {
+  try {
     return new URL(path);
+  } catch {
+    // it's probably a path
   }
 
   if (path.startsWith("/")) {
@@ -42,13 +44,29 @@ const {
   .parse(Deno.args);
 
 const outfile = normalizePath(out);
+if (!outfile.pathname.endsWith("/")) {
+  // test if it's a directory
+  try {
+    const stat = await Deno.stat(outfile);
+    if (stat.isDirectory) {
+      outfile.pathname += "/";
+    }
+  } catch {
+    // probably doesn't exist yet
+  }
+}
+
 if (outfile.pathname.endsWith("/")) {
   outfile.pathname += "schema_gen.ts";
 }
 
+if (!outfile.pathname.endsWith(".ts")) {
+  outfile.pathname += ".ts";
+}
+
 await Deno.writeTextFile(
-  out,
-  await generate(await parseSchema(normalizePath(schema)), out, {
+  outfile,
+  await generate(await parseSchema(normalizePath(schema)), outfile.pathname, {
     scalarsInfo: scalars ? await parseScalars(normalizePath(scalars)) : undefined,
     fieldDirectivesInfo: fieldDirectives ? await parseTypeResolvers("", normalizePath(fieldDirectives)) : undefined,
     inputDirectivesInfo: inputDirectives ? await parseTypeResolvers("", normalizePath(inputDirectives)) : undefined,

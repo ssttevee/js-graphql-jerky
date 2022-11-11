@@ -8,16 +8,16 @@ async function parseResolverFile(path: URL): Promise<Record<string, SymbolRefere
         ([name, { declaration }]): [string, SymbolReference][] => {
           if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
             if (ts.isFunctionExpression(declaration.initializer)) {
-              return [[name, { module: path.pathname, symbol: name }]];
+              return [[name, { module: path.toString(), symbol: name }]];
             }
 
             if (ts.isArrowFunction(declaration.initializer)) {
-              return [[name, { module: path.pathname, symbol: name }]];
+              return [[name, { module: path.toString(), symbol: name }]];
             }
           }
 
           if (ts.isFunctionDeclaration(declaration)) {
-            return [[name, { module: path.pathname, symbol: name }]];
+            return [[name, { module: path.toString(), symbol: name }]];
           }
 
           return [];
@@ -42,7 +42,9 @@ export async function parseTypeResolvers(typeName: string, path: URL): Promise<R
       const file = new URL(entry.name, path);
       for (const [name, reference] of Object.entries(await parseResolverFile(file))) {
         if (name in result) {
-          console.warn(`Duplicate resolver name: ${typeName}.${name} in ${file.pathname} and ${result[name].module}`);
+          console.warn(
+            `Duplicate resolver name: ${typeName}.${name} in ${file.toString()} and ${result[name].module}`,
+          );
         }
 
         result[name] = reference;

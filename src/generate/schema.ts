@@ -7,6 +7,7 @@ import {
   validateSchema,
 } from "https://esm.sh/graphql@16.6.0";
 import { walk, type WalkEntry } from "https://deno.land/std@0.161.0/fs/mod.ts";
+import { basename, fromFileUrl } from "https://deno.land/std@0.161.0/path/mod.ts";
 import { mergeDocumentNodes } from "./merge.ts";
 
 export async function parse(path: URL): Promise<GraphQLSchema> {
@@ -38,6 +39,18 @@ export async function parse(path: URL): Promise<GraphQLSchema> {
 }
 
 async function* glob(path: URL): AsyncIterable<WalkEntry> {
+  const stat = await Deno.stat(path);
+  if (stat.isFile) {
+    yield {
+      name: basename(fromFileUrl(path)),
+      path: fromFileUrl(path),
+      isFile: true,
+      isDirectory: false,
+      isSymlink: false,
+    };
+    return;
+  }
+
   for await (const entry of walk(path)) {
     if (entry.isFile && entry.path.endsWith(".graphql")) {
       yield entry;

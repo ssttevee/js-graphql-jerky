@@ -28,6 +28,7 @@ import { pascalCase } from "https://deno.land/x/case@2.1.1/mod.ts";
 import { format } from "./utils/format.ts";
 import { RequiredPackages } from "./utils/packages.ts";
 import { renderSymbolReference, SymbolReference } from "./utils/reference.ts";
+import { fromFileUrl } from "https://deno.land/std@0.161.0/path/mod.ts";
 
 function compareEntryKey(
   [a]: [string, ...any[]],
@@ -73,8 +74,8 @@ function renderImports(
   return jen.statements(
     ...imports.map(([pkg, symbols]) => {
       let mod: string = pkg;
-      if (pkg.startsWith("/")) {
-        mod = path.relative(base, pkg);
+      if (pkg.startsWith("file:///")) {
+        mod = path.relative(base, fromFileUrl(pkg));
         if (!mod.startsWith(".")) {
           mod = `./${mod}`;
         }
