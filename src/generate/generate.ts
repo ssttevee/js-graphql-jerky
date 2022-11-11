@@ -71,13 +71,21 @@ function renderImports(
   aliases: Record<string, string>,
 ): jen.Expr {
   return jen.statements(
-    ...imports.map(([pkg, symbols]) =>
-      jen.import.obj(
+    ...imports.map(([pkg, symbols]) => {
+      let mod: string = pkg;
+      if (pkg.startsWith("/")) {
+        mod = path.relative(base, pkg);
+        if (!mod.startsWith(".")) {
+          mod = `./${mod}`;
+        }
+      }
+
+      return jen.import.obj(
         ...Array.from(symbols)
           .sort((a, b) => a.localeCompare(b) || importAlias(a).localeCompare(importAlias(b)))
           .map((symbol) => symbol in aliases ? jen.id(aliases[symbol]).as.id(symbol) : jen.id(symbol)),
-      ).from.lit(pkg.startsWith("/") ? path.relative(base, pkg) : pkg)
-    ),
+      ).from.lit(mod);
+    }),
   );
 }
 
