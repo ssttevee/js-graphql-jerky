@@ -1,4 +1,5 @@
 import {
+  DirectiveLocation,
   GraphQLArgument,
   GraphQLDirective,
   GraphQLEnumType,
@@ -14,6 +15,8 @@ import {
   GraphQLSchema,
   GraphQLType,
   GraphQLUnionType,
+  Kind,
+  ValueNode,
 } from "https://esm.sh/graphql@16.6.0";
 import * as path from "https://deno.land/std@0.161.0/path/mod.ts";
 import { partition } from "https://deno.land/std@0.162.0/collections/partition.ts";
@@ -97,8 +100,9 @@ interface InterfaceImplementors {
   implementors: GraphQLObjectType[];
 }
 
-interface GenerateOptions {
+export interface GenerateOptions {
   scalarsInfo?: Awaited<ReturnType<typeof import("./scalars.ts").parse>>;
+  fieldDirectivesInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
   resolversInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parse>>;
   subscribersInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
   graphqlModuleSpecifier?: string;
@@ -108,12 +112,14 @@ class SchemaGenerator {
   private _pkgs: RequiredPackages;
 
   private _scalarsInfo: Exclude<GenerateOptions["scalarsInfo"], undefined>;
+  private _fieldDirectivesInfo: Exclude<GenerateOptions["fieldDirectivesInfo"], undefined>;
   private _resolversInfo: Exclude<GenerateOptions["resolversInfo"], undefined>;
   private _subscribersInfo: Exclude<GenerateOptions["subscribersInfo"], undefined>;
   private _graphqlModuleSpecifier: string;
 
   private constructor(options: GenerateOptions = {}) {
     this._scalarsInfo = options.scalarsInfo ?? {};
+    this._fieldDirectivesInfo = options.fieldDirectivesInfo ?? {};
     this._resolversInfo = options.resolversInfo ?? {};
     this._subscribersInfo = options.subscribersInfo ?? {};
     this._graphqlModuleSpecifier = options.graphqlModuleSpecifier ?? "graphql";
@@ -170,6 +176,32 @@ class SchemaGenerator {
     );
   }
 
+  private _renderValueNode(node: ValueNode): jen.Expr {
+    switch (node.kind) {
+      case Kind.ENUM:
+      case Kind.STRING:
+      case Kind.BOOLEAN:
+        return jen.lit(node.value);
+
+      case Kind.INT:
+      case Kind.FLOAT:
+        return jen.id(node.value);
+
+      case Kind.NULL:
+        return jen.null;
+
+      case Kind.LIST:
+        return jen.array(...node.values.map((v) => this._renderValueNode(v)));
+
+      case Kind.OBJECT:
+        return jen.obj(
+          ...node.fields.map((f) => jen.prop(f.name.value, this._renderValueNode(f.value))),
+        );
+    }
+
+    throw new Error(`unexpected value kind: ${node.kind}`);
+  }
+
   private _renderFieldObject(
     type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
     f:
@@ -184,6 +216,31 @@ class SchemaGenerator {
         if ((resolver = this._resolversInfo[iface.name]?.[f.name])) {
           break;
         }
+      }
+    }
+
+    let resolveFn = resolver && renderSymbolReference(this._pkgs, resolver);
+    if (f.astNode?.directives?.length) {
+      // apply directives in reverse order
+      for (const directive of Array.from(f.astNode.directives).reverse()) {
+        const ref = this._fieldDirectivesInfo[directive.name.value];
+        if (!ref) {
+          continue;
+        }
+
+        if (!resolveFn) {
+          resolveFn = jen.arrow(jen.id("source").op(":").any).id("source").dot(f.name);
+        }
+
+        resolveFn = renderSymbolReference(this._pkgs, ref).call(
+          resolveFn,
+          jen.obj(
+            ...Array.from(
+              directive.arguments ?? [],
+              (arg) => jen.prop(arg.name.value, this._renderValueNode(arg.value)),
+            ),
+          ),
+        );
       }
     }
 
@@ -209,7 +266,7 @@ class SchemaGenerator {
 
         // NOTE: Resolver functions on interface definitions are not used by the default graphql-js
         //       executor implementation, but nonetheless accessible by a potential alternate implementation.
-        resolver && jen.prop("resolve", renderSymbolReference(this._pkgs, resolver)),
+        resolveFn && jen.prop("resolve", resolveFn),
         subscriber && jen.prop("subscribe", renderSymbolReference(this._pkgs, subscriber)),
       ]),
     );
@@ -585,25 +642,41 @@ class SchemaGenerator {
   }
 
   private _renderGraphQLDirective(directive: GraphQLDirective): jen.Expr {
-    return jen.const.add(this._renderGraphQLTypeIdentifier(directive)).op("=").new.add(this._gql("GraphQLDirective"))
-      .call(
-        jen.obj(
-          jen.prop("name", jen.lit(directive.name)),
-          jen.prop(
-            "locations",
-            jen.array(
-              ...Array.from(directive.locations).sort().map((location) =>
-                jen.add(this._gql("DirectiveLocation")).dot(location)
+    return jen.statements(
+      jen.const.add(this._renderGraphQLTypeIdentifier(directive)).op("=").new.add(this._gql("GraphQLDirective"))
+        .call(
+          jen.obj(
+            jen.prop("name", jen.lit(directive.name)),
+            jen.prop(
+              "locations",
+              jen.array(
+                ...Array.from(directive.locations).sort().map((location) =>
+                  jen.add(this._gql("DirectiveLocation")).dot(location)
+                ),
               ),
             ),
+            jen.prop("args", this._renderArgumentsObject(directive.args)),
+            ...truthify([
+              directive.description && jen.prop("description", jen.lit(directive.description)),
+              directive.isRepeatable && jen.prop("isRepeatable", jen.true),
+            ]),
           ),
-          jen.prop("args", this._renderArgumentsObject(directive.args)),
-          ...truthify([
-            directive.description && jen.prop("description", jen.lit(directive.description)),
-            directive.isRepeatable && jen.prop("isRepeatable", jen.true),
-          ]),
         ),
-      );
+      ...truthify([
+        directive.args.length && jen.export.interface.id(pascalCase(directive.name + "_directive_args")).block(
+          ...directive.args.map((arg) =>
+            jen.prop(
+              jen.id(arg.name).add(
+                ...truthify([
+                  !(arg.type instanceof GraphQLNonNull) && jen.op("?"),
+                ]),
+              ),
+              this._renderGraphQLTypeType(arg.type),
+            )
+          ),
+        ),
+      ]),
+    );
   }
 
   public static renderSchema(
@@ -611,6 +684,21 @@ class SchemaGenerator {
     outfile: string,
     options: GenerateOptions = {},
   ): jen.Expr {
+    if (options.fieldDirectivesInfo) {
+      const names = new Set(Object.keys(options.fieldDirectivesInfo));
+      for (const directive of schema.getDirectives()) {
+        if (
+          isBuiltInDirective(directive.name) ||
+          directive.locations.every((loc) => loc !== DirectiveLocation.FIELD_DEFINITION) ||
+          names.has(directive.name)
+        ) {
+          continue;
+        }
+
+        console.log(`WARNING: missing directive function for ${JSON.stringify(directive.name)}`);
+      }
+    }
+
     const types = Object.entries(schema.getTypeMap())
       .sort(compareEntryKey)
       .filter(([, type]) => !type.name.startsWith("__") && !isPrimitiveType(type))

@@ -149,6 +149,30 @@ export function actors(source: null, { id }: Query.ActorArgs): Actor {
 The `--subscribers` option specifies the module from which subscribe functions are imported. This works in the same way
 as any particular type from the `--resolvers` option, except it is for the `Subscription` type only.
 
+#### --field-directives
+
+The `--field-directives` option specifies the module from which field directive functions are imported.
+
+Field directive functions work like middleware for field resolvers. They receive a field resolver function and return a
+field resolver function. The function that is returned may be a completely new function, or same function that was
+passed in as the parameter.
+
+For example, a directive that ensures that only authorized users may access a field may look like this:
+
+```js
+export function secure(next: GraphQLFieldResolver<any, any>, {}: SecureDirectiveArgs): GraphQLFieldResolver<any, any> {
+  return (src: any, args: any, ctx: any, info: GraphQLResolveInfo) => {
+    if (!ctx.authorization) {
+      throw new GraphQLError("unauthorized");
+    }
+
+    // src, args, ctx can be mutated here before being passed to the next resolver
+
+    return next(src, args, ctx, info);
+  }
+}
+```
+
 ## Goals
 
 - Generate runtime-agnostic code

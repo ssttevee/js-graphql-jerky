@@ -58,8 +58,12 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
     } else if (ts.isExportDeclaration(node)) {
       if (node.exportClause && ts.isNamedExports(node.exportClause)) {
         if (node.moduleSpecifier) {
+          if (!ts.isStringLiteral(node.moduleSpecifier)) {
+            continue;
+          }
+
           // export { whatever } from 'whatever';
-          const specifier = node.moduleSpecifier.getText(source);
+          const specifier = node.moduleSpecifier.text;
           const moduleExports = await findExports(
             await resolveModuleFn(specifier, new URL(source.fileName)),
             resolveModuleFn,
@@ -76,8 +80,8 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
         } else {
           for (const element of node.exportClause.elements) {
             namedExports.push({
-              name: element.name.getText(source),
-              property: element.propertyName?.getText(source),
+              name: element.name.text,
+              property: element.propertyName?.text,
             });
             // exports[element.name.getText(source)] = { declaration: element, source };
           }

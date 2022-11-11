@@ -32,8 +32,13 @@ async function parseResolverFile(path: URL): Promise<Record<string, SymbolRefere
 }
 
 export async function parseTypeResolvers(typeName: string, path: URL): Promise<Record<string, SymbolReference>> {
-  if (!path.pathname.endsWith("/")) {
+  const stat = await Deno.stat(path);
+  if (stat.isFile) {
     return parseResolverFile(path);
+  }
+
+  if (!path.pathname.endsWith("/")) {
+    path.pathname += "/";
   }
 
   const result: Record<string, SymbolReference> = {};
