@@ -30,7 +30,7 @@ import {
   TypeNode,
   UnionTypeDefinitionNode,
   ValueNode,
-} from "https://esm.sh/graphql@16.6.0";
+} from "npm:graphql@16.6.0";
 import { zip } from "https://deno.land/std@0.162.0/collections/zip.ts";
 
 function locLineColumn(loc: Location): [number, number] {

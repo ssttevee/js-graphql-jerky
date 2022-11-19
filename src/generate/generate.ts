@@ -20,7 +20,7 @@ import {
   GraphQLUnionType,
   Kind,
   ValueNode,
-} from "https://esm.sh/graphql@16.6.0";
+} from "npm:graphql@16.6.0";
 import * as path from "https://deno.land/std@0.161.0/path/mod.ts";
 import { partition } from "https://deno.land/std@0.162.0/collections/partition.ts";
 import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e530bec1bda87bab4a0d4b923daa13/mod.ts";

@@ -5,7 +5,7 @@ import {
   parse as parseDocument,
   Source,
   validateSchema,
-} from "https://esm.sh/graphql@16.6.0";
+} from "npm:graphql@16.6.0";
 import { walk, type WalkEntry } from "https://deno.land/std@0.161.0/fs/mod.ts";
 import { basename, fromFileUrl } from "https://deno.land/std@0.161.0/path/mod.ts";
 import { mergeDocumentNodes } from "./merge.ts";

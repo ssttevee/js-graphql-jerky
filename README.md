@@ -30,7 +30,7 @@ A path to a directory or file can be passed as the first parameter to limit to s
 The `--graphql` option specifies the module from which the graphql types will be imported. Defaults to `graphql`.
 
 This is sometimes necessary depending on your target platform or runtime. In particular, a node project would probably
-`graphql` from npm, where as a deno project may use `https://esm.sh/graphql` instead.
+`graphql` from npm, where as a deno project may use `npm:graphql` instead.
 
 #### --scalars
 
