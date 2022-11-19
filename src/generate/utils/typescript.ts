@@ -1,4 +1,4 @@
-import ts from "https://raw.githubusercontent.com/ssttevee/deno-typescript/v1.27.0/mod.ts";
+import ts from "npm:typescript@4.9";
 
 async function parseSource(filepath: URL): Promise<ts.SourceFile> {
   return ts.createSourceFile(
