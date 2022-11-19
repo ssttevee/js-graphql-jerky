@@ -1,0 +1,5 @@
+{
+    "tasks": {
+        "generate": "deno run --no-prompt --allow-read=. --allow-write=schema_gen.ts --allow-env ../../src/command/jerky.ts --resolvers resolvers"
+    }
+}
