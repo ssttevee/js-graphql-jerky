@@ -1,9 +1,12 @@
-import ts from "npm:typescript@4.9";
+import fs from "fs/promises";
+import { resolve } from "path";
+import ts from "typescript";
+import { pathToFileURL } from "url";
 
-async function parseSource(filepath: URL): Promise<ts.SourceFile> {
+export async function parseSource(filepath: URL): Promise<ts.SourceFile> {
   return ts.createSourceFile(
     filepath.href,
-    await Deno.readTextFile(filepath),
+    await fs.readFile(filepath, "utf-8"),
     ts.ScriptTarget.ESNext,
   );
 }
@@ -39,13 +42,17 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
   const exports: Exports = {};
   const namedExports: Array<{ name: string; property?: string }> = [];
   for (const node of source.statements) {
-    if (ts.isFunctionDeclaration(node)) {
+    if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) {
       if (node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
         if (node.modifiers.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)) {
           exports.default = { declaration: node, source, name: "default" };
         } else if (node.name) {
           exports[node.name.getText(source)] = { declaration: node, source, name: node.name.getText(source) };
         }
+      }
+    } else if (ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node)) {
+      if (node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+        exports[node.name.getText(source)] = { declaration: node, source, name: node.name.getText(source) };
       }
     } else if (ts.isVariableStatement(node)) {
       if (node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
@@ -189,8 +196,7 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
 
               if (!importExports[element.name.getText(source)]) {
                 throw new Error(
-                  `Exported name ${element.name.getText(source)} not found in ${
-                    JSON.stringify(statement.moduleSpecifier.getText(source))
+                  `Exported name ${element.name.getText(source)} not found in ${JSON.stringify(statement.moduleSpecifier.getText(source))
                   }`,
                 );
               }
@@ -213,12 +219,17 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
 export interface Module {
   path: URL;
   exports: Exports;
+  source: ts.SourceFile;
 }
 
-export async function parseModule(path: URL): Promise<Module> {
+export async function parseModule(source: string | ts.SourceFile): Promise<Module> {
+  const url = typeof source === 'string' ? pathToFileURL(resolve(source)) : new URL(source.fileName);
+  source = typeof source === 'string' ? await parseSource(url) : source;
+
   return {
-    path,
-    exports: await findExports(await parseSource(path)),
+    path: url,
+    exports: await findExports(source),
+    source,
   };
 }
 

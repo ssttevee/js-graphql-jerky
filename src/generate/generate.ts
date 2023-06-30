@@ -20,15 +20,16 @@ import {
   GraphQLUnionType,
   Kind,
   ValueNode,
-} from "npm:graphql@16.6.0";
-import * as path from "https://deno.land/std@0.161.0/path/mod.ts";
-import { partition } from "https://deno.land/std@0.162.0/collections/partition.ts";
-import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e530bec1bda87bab4a0d4b923daa13/mod.ts";
-import { pascalCase } from "https://deno.land/x/case@2.1.1/mod.ts";
-import { format } from "./utils/format.ts";
-import { RequiredPackages } from "./utils/packages.ts";
-import { renderSymbolReference, SymbolReference } from "./utils/reference.ts";
-import { fromFileUrl } from "https://deno.land/std@0.161.0/path/mod.ts";
+} from "graphql";
+import jen from "jennifer-js";
+import format from "jennifer-js/format";
+import partition from "just-partition";
+import pascalCase from "just-pascal-case";
+import path from "path";
+import { fileURLToPath } from "url";
+
+import { RequiredPackages } from "./utils/packages.js";
+import { renderSymbolReference, SymbolReference } from "./utils/reference.js";
 
 function compareEntryKey(
   [a]: [string, ...any[]],
@@ -70,15 +71,33 @@ function renderImports(
   base: string,
   imports: Array<[string, Set<string>]>,
   aliases: Record<string, string>,
+  extMode: 
+    | "omit"    // omit the extension altogether
+    | "replace" // replace the extension with .js
+    | "keep"    // keep the extension as-is
+    = "omit",
 ): jen.Expr {
   return jen.statements(
     ...imports.map(([pkg, symbols]) => {
       let mod: string = pkg;
-      if (pkg.startsWith("file:///")) {
-        mod = path.relative(base, fromFileUrl(pkg));
+      if (mod.startsWith("file:///")) {
+        mod = fileURLToPath(mod);
+      }
+
+      if (mod.startsWith('/')) {
+        mod = path.relative(base, mod);
         if (!mod.startsWith(".")) {
           mod = `./${mod}`;
         }
+      }
+
+      if (extMode === "omit") {
+        const ext = path.extname(mod);
+        if (ext) {
+          mod = mod.slice(0, -ext.length);
+        }
+      } else if (extMode === "replace") {
+        mod = mod.replace(/\.ts$/, ".js");
       }
 
       return jen.import.obj(
@@ -113,12 +132,13 @@ interface InterfaceImplementors {
 }
 
 export interface GenerateOptions {
-  scalarsInfo?: Awaited<ReturnType<typeof import("./scalars.ts").parse>>;
-  fieldDirectivesInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
-  inputDirectivesInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
-  resolversInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parse>>;
-  subscribersInfo?: Awaited<ReturnType<typeof import("./resolvers.ts").parseTypeResolvers>>;
+  scalarsInfo?: Awaited<ReturnType<typeof import("./scalars.js").parse>>;
+  fieldDirectivesInfo?: Awaited<ReturnType<typeof import("./resolvers.js").parseTypeResolvers>>;
+  inputDirectivesInfo?: Awaited<ReturnType<typeof import("./resolvers.js").parseTypeResolvers>>;
+  resolversInfo?: Awaited<ReturnType<typeof import("./resolvers.js").parse>>;
+  subscribersInfo?: Awaited<ReturnType<typeof import("./resolvers.js").parseTypeResolvers>>;
   graphqlModuleSpecifier?: string;
+  extMode?: "omit" | "replace" | "keep";
 }
 
 interface TypeRenderContext {
@@ -126,8 +146,9 @@ interface TypeRenderContext {
   inputFieldDirectives: Record<string, Record<string, string[]>>;
 }
 
-class SchemaGenerator {
+class GeneratorContext {
   private _pkgs: RequiredPackages;
+  private _extMode: GenerateOptions["extMode"];
 
   private _scalarsInfo: Exclude<GenerateOptions["scalarsInfo"], undefined>;
   private _fieldDirectivesInfo: Exclude<GenerateOptions["fieldDirectivesInfo"], undefined>;
@@ -136,7 +157,7 @@ class SchemaGenerator {
   private _subscribersInfo: Exclude<GenerateOptions["subscribersInfo"], undefined>;
   private _graphqlModuleSpecifier: string;
 
-  private constructor(options: GenerateOptions = {}) {
+  public constructor(options: GenerateOptions = {}) {
     this._scalarsInfo = options.scalarsInfo ?? {};
     this._fieldDirectivesInfo = options.fieldDirectivesInfo ?? {};
     this._inputDirectivesInfo = options.inputDirectivesInfo ?? {};
@@ -144,6 +165,7 @@ class SchemaGenerator {
     this._subscribersInfo = options.subscribersInfo ?? {};
     this._graphqlModuleSpecifier = options.graphqlModuleSpecifier ?? "graphql";
     this._pkgs = new RequiredPackages();
+    this._extMode = options.extMode ?? "omit";
   }
 
   private _gql(name: string): jen.Expr {
@@ -166,7 +188,7 @@ class SchemaGenerator {
         return this._gql("GraphQL" + type.name);
       }
 
-      return jen.id("_" + type.name + "Scalar");
+      return jen.id(type.name + "Scalar");
     }
 
     return jen.id(
@@ -262,9 +284,9 @@ class SchemaGenerator {
           resolveFn = jen.arrow(jen.id("source").op(":").any).id("source").dot(f.name);
         }
 
-        resolveFn = renderSymbolReference(this._pkgs, ref).call(
+        resolveFn = renderSymbolReference(this._pkgs, ref, `apply${pascalCase(directive.name.value)}FieldDirective`).call(
           resolveFn,
-          this._renderArgumentNodes(directive.arguments),
+          ...(directive.arguments?.length ? [this._renderArgumentNodes(directive.arguments)] : []),
         );
       }
     }
@@ -274,9 +296,6 @@ class SchemaGenerator {
       const argsWithDirectives = truthify(
         f.args?.map((arg) => this._findInputDirectiveInfoFromArgOrField(arg, inputFieldDirectives)) ?? [],
       );
-      if (type.name === "Mutation" && f.name === "inviteMembers") {
-        console.log(f.args?.map((arg) => arg.astNode));
-      }
       if (argsWithDirectives.length) {
         resolveFn = jen.parens(
           jen.params(jen.prop("next", this._gql("GraphQLFieldResolver").types(jen.any, jen.any))).op(":")
@@ -296,9 +315,9 @@ class SchemaGenerator {
       }
     }
 
-    // NOTE: The way subscribers work in the graphql-js is by calling `subscribe` on the top level fields (and only on
-    //       Subscription), and then calling `resolve` on the nested fields. This means that subscribers only need to be
-    //       defined on `Query`.
+    // NOTE: The way subscribers work in the graphql-js is by calling `subscribe` on the top level fields, and then
+    //       calling `resolve` on the nested fields. This means that subscribers only need to be defined on 
+    //       `Subscription`.
     //
     //       In theory, an alternate implementation could be created to call `subscribe` at every level, but considering
     //       how subscribe functions work, it would be unclear how it would make sense.
@@ -318,7 +337,7 @@ class SchemaGenerator {
 
         // NOTE: Resolver functions on interface definitions are not used by the default graphql-js
         //       executor implementation, but nonetheless accessible by a potential alternate implementation.
-        resolveFn && jen.prop("resolve", resolveFn),
+        resolveFn && jen.prop("resolve", jen.parens(resolveFn).as.any),
         subscriber && jen.prop("subscribe", renderSymbolReference(this._pkgs, subscriber)),
       ]),
     );
@@ -363,21 +382,6 @@ class SchemaGenerator {
         return scalarType;
       }
 
-      switch (type.name) {
-        case "ID":
-          return "ID";
-
-        case "Int":
-        case "Float":
-          return "number";
-
-        case "String":
-          return "string";
-
-        case "Boolean":
-          return "boolean";
-      }
-
       return "unknown";
     }
 
@@ -403,6 +407,28 @@ class SchemaGenerator {
       }
 
       returnType = info.type.symbol;
+    }
+
+    if (!returnType) {
+      // these are the built-in scalars
+      switch (type.name) {
+        case "ID":
+          returnType = "string | number";
+          break;
+
+        case "Int":
+        case "Float":
+          returnType = "number";
+          break;
+
+        case "String":
+          returnType = "string";
+          break;
+
+        case "Boolean":
+          returnType = "boolean";
+          break;
+      }
     }
 
     if (!returnType) {
@@ -447,35 +473,39 @@ class SchemaGenerator {
     );
   }
 
-  private _renderGraphQLObjectType(
+  private _renderGraphQLObjectTypeDefinition(
     type: GraphQLObjectType,
     { inputFieldDirectives }: TypeRenderContext,
-  ): [jen.Expr, ...jen.Expr[]] {
+  ): jen.Expr {
     const typeInterfaces = type.getInterfaces();
+    return jen.new.add(this._gql("GraphQLObjectType")).call(
+      jen.obj(
+        jen.prop("name", jen.lit(type.name)),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
+        ...truthify([
+          type.description && jen.prop("description", jen.lit(type.description)),
+          typeInterfaces.length && jen.prop(
+            "interfaces",
+            jen.arrow().arr(
+              // do not sort interfaces, the declaration order may be important
+              ...typeInterfaces.map(
+                this._renderGraphQLTypeIdentifier,
+                this,
+              ),
+            ),
+          ),
+        ]),
+      ),
+    ).as.add(this._gql("GraphQLObjectType"));
+  }
+
+  private _renderGraphQLObjectTypeTypes(
+    type: GraphQLObjectType,
+  ): jen.Expr[] {
     const fieldsWithArgs = Object.values(type.getFields())
       .filter((field) => field.args.length)
       .sort(compareName);
-
     return [
-      jen.new.add(this._gql("GraphQLObjectType")).call(
-        jen.obj(
-          jen.prop("name", jen.lit(type.name)),
-          jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
-          ...truthify([
-            type.description && jen.prop("description", jen.lit(type.description)),
-            typeInterfaces.length && jen.prop(
-              "interfaces",
-              jen.arrow().arr(
-                // do not sort interfaces, the declaration order may be important
-                ...typeInterfaces.map(
-                  this._renderGraphQLTypeIdentifier,
-                  this,
-                ),
-              ),
-            ),
-          ]),
-        ),
-      ).as.add(this._gql("GraphQLObjectType")),
       jen.export.add(this._renderTypeInterface(type)),
       ...(fieldsWithArgs.length
         ? [
@@ -500,23 +530,21 @@ class SchemaGenerator {
     ];
   }
 
-  private _renderGraphQLScalarType(
+  private _renderGraphQLScalarTypeDefinition(
     type: GraphQLScalarType,
-  ): [jen.Expr, ...jen.Expr[]] {
+  ): jen.Expr {
     const s = this._scalarsInfo[type.name];
-    return [
-      jen.new.add(this._gql("GraphQLScalarType")).call(
-        jen.obj(
-          jen.prop("name", jen.lit(type.name)),
-          ...truthify([
-            type.description && jen.prop("description", jen.lit(type.description)),
-            s?.serializeFunc && jen.prop("serialize", renderSymbolReference(this._pkgs, s.serializeFunc)),
-            s?.parseValueFunc && jen.prop("parseValue", renderSymbolReference(this._pkgs, s.parseValueFunc)),
-            s?.parseLiteralFunc && jen.prop("parseLiteral", renderSymbolReference(this._pkgs, s.parseLiteralFunc)),
-          ]),
-        ),
+    return jen.new.add(this._gql("GraphQLScalarType")).call(
+      jen.obj(
+        jen.prop("name", jen.lit(type.name)),
+        ...truthify([
+          type.description && jen.prop("description", jen.lit(type.description)),
+          jen.prop("serialize", s?.serializeFunc ? renderSymbolReference(this._pkgs, s.serializeFunc) : jen.trivia("stub").arrow(jen.id("v")).id("v")),
+          s?.parseValueFunc && jen.prop("parseValue", renderSymbolReference(this._pkgs, s.parseValueFunc)),
+          s?.parseLiteralFunc && jen.prop("parseLiteral", renderSymbolReference(this._pkgs, s.parseLiteralFunc)),
+        ]),
       ),
-    ];
+    );
   }
 
   private _renderTypeResolverAndCastFunctions(
@@ -566,50 +594,79 @@ class SchemaGenerator {
     ];
   }
 
-  private _renderGraphQLInterfaceType(
+  private _renderGraphQLInterfaceTypeDefinition(
     type: GraphQLInterfaceType,
     { implementors: { implementors }, inputFieldDirectives }: TypeRenderContext,
-  ): [jen.Expr, ...jen.Expr[]] {
-    const [resolver, castFns] = this._renderTypeResolverAndCastFunctions(type, implementors, "interface");
+  ): jen.Expr {
+    return jen.new.add(this._gql("GraphQLInterfaceType")).call(
+      jen.obj(
+        jen.prop("name", jen.lit(type.name)),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
+        ...truthify([
+          type.description && jen.prop("description", jen.lit(type.description)),
+        ]),
+      ),
+    ).as.add(this._gql("GraphQLInterfaceType"));
+  }
+
+  private _renderGraphQLInterfaceTypeTypes(type: GraphQLInterfaceType, { implementors: { implementors } }: TypeRenderContext): jen.Expr[] {
+    const fieldsWithArgs = Object.values(type.getFields())
+      .filter((field) => field.args.length)
+      .sort(compareName);
     return [
-      jen.new.add(this._gql("GraphQLInterfaceType")).call(
-        jen.obj(
-          jen.prop("name", jen.lit(type.name)),
-          jen.prop("resolveType", resolver),
-          jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
-          ...truthify([
-            type.description && jen.prop("description", jen.lit(type.description)),
-          ]),
-        ),
-      ).as.add(this._gql("GraphQLInterfaceType")),
       jen.export.add(this._renderTypeInterface(type)),
-      ...castFns,
+      jen.export.namespace.id(type.name).block(
+        ...implementors.map((implementor) =>
+          jen.export.const.id("as" + pascalCase(implementor.name)).op("=")
+          .types(jen.id("T")).params(jen.prop("v", jen.id("T"))).op("=>").id("setTypename").call(jen.id("v"), jen.lit(implementor.name))
+        ),
+
+        ...fieldsWithArgs.map((field) =>
+          jen.export.interface.id(pascalCase(field.name + "_args")).block(
+            ...Array.from(field.args)
+              .sort(compareName)
+              .map((arg) =>
+                jen.prop(
+                  arg.name,
+                  this._renderOptionalGraphQLTypeType(
+                    arg.type,
+                  ),
+                )
+              ),
+          )
+        ),
+      ),
     ];
   }
 
-  private _renderGraphQLUnionType(
+  private _renderGraphQLUnionTypeDefinition(
     type: GraphQLUnionType,
-  ): [jen.Expr, ...jen.Expr[]] {
-    const [resolver, castFns] = this._renderTypeResolverAndCastFunctions(type, type.getTypes(), "interface");
-
-    return [
-      jen.new.add(this._gql("GraphQLUnionType")).call(
-        jen.obj(
-          jen.prop("name", jen.lit(type.name)),
-          jen.prop("resolveType", resolver),
-          jen.prop(
-            "types",
-            jen.arrow().array(...type.getTypes().map((type) => this._renderGraphQLTypeIdentifier(type))),
-          ),
-          ...truthify([
-            type.description && jen.prop("description", jen.lit(type.description)),
-          ]),
+  ): jen.Expr {
+    return jen.new.add(this._gql("GraphQLUnionType")).call(
+      jen.obj(
+        jen.prop("name", jen.lit(type.name)),
+        jen.prop(
+          "types",
+          jen.arrow().array(...type.getTypes().map((type) => this._renderGraphQLTypeIdentifier(type))),
         ),
+        ...truthify([
+          type.description && jen.prop("description", jen.lit(type.description)),
+        ]),
       ),
+    );
+  }
+
+  private _renderGraphQLUnionTypeTypes(type: GraphQLUnionType): jen.Expr[] {
+    return [
       jen.export.type.add(this._renderGraphQLTypeType(type)).op("=").union(
         ...Array.from(type.getTypes()).sort(compareName).map(this._renderGraphQLTypeType, this),
       ),
-      ...castFns,
+      jen.export.namespace.id(type.name).block(
+        ...type.getTypes().map((type) =>
+          jen.export.const.id("as" + pascalCase(type.name)).op("=")
+            .types(jen.id("T")).params(jen.prop("v", jen.id("T"))).op("=>").id("setTypename").call(jen.id("v"), jen.lit(type.name))
+        )
+      ),
     ];
   }
 
@@ -636,7 +693,7 @@ class SchemaGenerator {
       });
 
       if (directives.length) {
-        return { field, directives: directives, transform };
+        return { field, directives, transform };
       }
     }
 
@@ -695,25 +752,31 @@ class SchemaGenerator {
     );
   }
 
-  private _renderGraphQLInputObjectType(
+  private _renderGraphQLInputObjectTypeDefinition(
     type: GraphQLInputObjectType,
     { inputFieldDirectives }: TypeRenderContext,
-  ): [jen.Expr, ...jen.Expr[]] {
+  ): jen.Expr {
+    return jen.new.add(this._gql("GraphQLInputObjectType")).call(
+      jen.obj(
+        jen.prop("name", jen.lit(type.name)),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
+        ...truthify([
+          type.description && jen.prop("description", jen.lit(type.description)),
+        ]),
+      ),
+    );
+  }
+
+  private _renderGraphQLInputObjectTypeTypes(
+    type: GraphQLInputObjectType,
+    { inputFieldDirectives }: TypeRenderContext,
+  ): jen.Expr[] {
     const fieldsWithDirectives = truthify(
       Object.values(type.getFields())
         .map((f) => this._findInputDirectiveInfoFromArgOrField(f, inputFieldDirectives)),
     );
 
     return [
-      jen.new.add(this._gql("GraphQLInputObjectType")).call(
-        jen.obj(
-          jen.prop("name", jen.lit(type.name)),
-          jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
-          ...truthify([
-            type.description && jen.prop("description", jen.lit(type.description)),
-          ]),
-        ),
-      ),
       jen.export.interface.add(this._renderGraphQLTypeType(type)).block(
         ...Object.values(type.getFields())
           .sort(compareName)
@@ -737,36 +800,41 @@ class SchemaGenerator {
     ];
   }
 
-  private _renderGraphQLEnumType(type: GraphQLEnumType): [jen.Expr, ...jen.Expr[]] {
+  private _renderGraphQLEnumTypeDefinition(type: GraphQLEnumType): jen.Expr {
+    const sortedValues = Array.from(type.getValues()).sort(compareName);
+
+    return jen.new.add(this._gql("GraphQLEnumType")).call(
+      jen.obj(
+        jen.prop("name", jen.lit(type.name)),
+        jen.prop(
+          "values",
+          jen.obj(
+            ...sortedValues.map(
+              (e) =>
+                jen.prop(
+                  e.name,
+                  jen.obj(
+                    jen.prop("value", jen.lit(e.value)),
+                    ...truthify([
+                      e.description && jen.prop("description", jen.lit(e.description)),
+                      e.deprecationReason && jen.prop("deprecationReason", jen.lit(e.deprecationReason)),
+                    ]),
+                  ),
+                ),
+            ),
+          ),
+        ),
+        ...truthify([
+          type.description && jen.prop("description", jen.lit(type.description)),
+        ]),
+      ),
+    );
+  }
+
+  private _renderGraphQLEnumTypeTypes(type: GraphQLEnumType): jen.Expr[] {
     const sortedValues = Array.from(type.getValues()).sort(compareName);
 
     return [
-      jen.new.add(this._gql("GraphQLEnumType")).call(
-        jen.obj(
-          jen.prop("name", jen.lit(type.name)),
-          jen.prop(
-            "values",
-            jen.obj(
-              ...sortedValues.map(
-                (e) =>
-                  jen.prop(
-                    e.name,
-                    jen.obj(
-                      jen.prop("value", jen.lit(e.value)),
-                      ...truthify([
-                        e.description && jen.prop("description", jen.lit(e.description)),
-                        e.deprecationReason && jen.prop("deprecationReason", jen.lit(e.deprecationReason)),
-                      ]),
-                    ),
-                  ),
-              ),
-            ),
-          ),
-          ...truthify([
-            type.description && jen.prop("description", jen.lit(type.description)),
-          ]),
-        ),
-      ),
       jen.export.enum.add(this._renderGraphQLTypeType(type)).obj(
         ...sortedValues.map(({ name }) => jen.id(name).op("=").lit(name)),
       ),
@@ -779,91 +847,232 @@ class SchemaGenerator {
     ];
   }
 
-  private _renderGraphQLType(
+  private _getRenderDefintionFnForType(type: GraphQLType): (ctx: TypeRenderContext) => jen.Expr {
+    if (type instanceof GraphQLObjectType) {
+      return this._renderGraphQLObjectTypeDefinition.bind(this, type);
+    }
+
+    if (type instanceof GraphQLScalarType) {
+      return this._renderGraphQLScalarTypeDefinition.bind(this, type);
+    }
+
+    if (type instanceof GraphQLInterfaceType) {
+      return this._renderGraphQLInterfaceTypeDefinition.bind(this, type);
+    }
+
+    if (type instanceof GraphQLUnionType) {
+      return this._renderGraphQLUnionTypeDefinition.bind(this, type);
+    }
+
+    if (type instanceof GraphQLInputObjectType) {
+      return this._renderGraphQLInputObjectTypeDefinition.bind(this, type);
+    }
+
+    if (type instanceof GraphQLEnumType) {
+      return this._renderGraphQLEnumTypeDefinition.bind(this, type);
+    }
+
+    throw new Error("unhandled type: " + type.toString());
+  }
+
+  private _getRenderTypesFnForType(type: GraphQLType): (ctx: TypeRenderContext) => jen.Expr[] {
+    if (type instanceof GraphQLObjectType) {
+      return this._renderGraphQLObjectTypeTypes.bind(this, type);
+    }
+
+    if (type instanceof GraphQLScalarType) {
+      return () => [];
+    }
+
+    if (type instanceof GraphQLInterfaceType) {
+      return this._renderGraphQLInterfaceTypeTypes.bind(this, type);
+    }
+
+    if (type instanceof GraphQLUnionType) {
+      return this._renderGraphQLUnionTypeTypes.bind(this, type);
+    }
+
+    if (type instanceof GraphQLInputObjectType) {
+      return this._renderGraphQLInputObjectTypeTypes.bind(this, type);
+    }
+
+    if (type instanceof GraphQLEnumType) {
+      return this._renderGraphQLEnumTypeTypes.bind(this, type);
+    }
+
+    throw new Error("unhandled type: " + type.toString());
+  }
+
+  private _renderGraphQLTypeDefinitions(
     type: GraphQLType,
     interfaces: Record<string, InterfaceImplementors>,
     inputFieldDirectives: Record<string, Record<string, string[]>>,
   ): jen.Expr {
-    const renderFn = (
-      type instanceof GraphQLObjectType
-        ? this._renderGraphQLObjectType
-        : type instanceof GraphQLScalarType
-        ? this._renderGraphQLScalarType
-        : type instanceof GraphQLInterfaceType
-        ? this._renderGraphQLInterfaceType
-        : type instanceof GraphQLUnionType
-        ? this._renderGraphQLUnionType
-        : type instanceof GraphQLInputObjectType
-        ? this._renderGraphQLInputObjectType
-        : type instanceof GraphQLEnumType
-        ? this._renderGraphQLEnumType
-        : undefined
+    return jen.const.add(this._renderGraphQLTypeIdentifier(type)).op("=").add(
+      this._getRenderDefintionFnForType(type)(
+        {
+          implementors: interfaces[(type as { name: string }).name],
+          inputFieldDirectives,
+        },
+      )
     );
+  }
 
-    if (!renderFn) {
-      throw new Error("unhandled type: " + type.toString());
-    }
-
-    const [typeValue, ...extra] = (renderFn as any as (
-      type: GraphQLType,
-      ctx: TypeRenderContext,
-    ) => jen.Expr[]).call(
-      this,
-      type,
+  private _renderGraphQLTypeTypes(
+    type: GraphQLType,
+    interfaces: Record<string, InterfaceImplementors>,
+    inputFieldDirectives: Record<string, Record<string, string[]>>,
+  ): jen.Expr[] {
+    return this._getRenderTypesFnForType(type)(
       {
         implementors: interfaces[(type as { name: string }).name],
         inputFieldDirectives,
       },
     );
-    return jen.statements(
-      jen.const.add(this._renderGraphQLTypeIdentifier(type)).op("=").add(typeValue),
-      ...extra,
-    );
   }
 
-  private _renderGraphQLDirective(directive: GraphQLDirective): jen.Expr {
-    return jen.statements(
-      jen.const.add(this._renderGraphQLTypeIdentifier(directive)).op("=").new.add(this._gql("GraphQLDirective"))
-        .call(
-          jen.obj(
-            jen.prop("name", jen.lit(directive.name)),
-            jen.prop(
-              "locations",
-              jen.array(
-                ...Array.from(directive.locations).sort().map((location) =>
-                  jen.add(this._gql("DirectiveLocation")).dot(location)
-                ),
+  private _renderGraphQLDirectiveDefinition(directive: GraphQLDirective): jen.Expr {
+    return jen.const.add(this._renderGraphQLTypeIdentifier(directive)).op("=").new.add(this._gql("GraphQLDirective"))
+      .call(
+        jen.obj(
+          jen.prop("name", jen.lit(directive.name)),
+          jen.prop(
+            "locations",
+            jen.array(
+              ...Array.from(directive.locations).sort().map((location) =>
+                jen.add(this._gql("DirectiveLocation")).dot(location)
               ),
             ),
-            jen.prop("args", this._renderArgumentsObject(directive.args)),
-            ...truthify([
-              directive.description && jen.prop("description", jen.lit(directive.description)),
-              directive.isRepeatable && jen.prop("isRepeatable", jen.true),
-            ]),
           ),
+          jen.prop("args", this._renderArgumentsObject(directive.args)),
+          ...truthify([
+            directive.description && jen.prop("description", jen.lit(directive.description)),
+            directive.isRepeatable && jen.prop("isRepeatable", jen.true),
+          ]),
         ),
-      ...truthify([
-        directive.args.length && jen.export.interface.id(pascalCase(directive.name + "_directive_args")).block(
-          ...directive.args.map((arg) =>
-            jen.prop(
-              jen.id(arg.name).add(
-                ...truthify([
-                  !(arg.type instanceof GraphQLNonNull) && jen.op("?"),
-                ]),
-              ),
-              this._renderGraphQLTypeType(arg.type),
-            )
-          ),
-        ),
-      ]),
-    );
+      );
   }
 
-  public static renderSchema(
+  private _renderGraphQLDirectiveTypes(directive: GraphQLDirective): jen.Expr[] {
+    return truthify([
+      directive.args.length && jen.export.interface.id(pascalCase(directive.name + "_directive_args")).block(
+        ...directive.args.map((arg) =>
+          jen.prop(
+            jen.id(arg.name).add(
+              ...truthify([
+                !(arg.type instanceof GraphQLNonNull) && jen.op("?"),
+              ]),
+            ),
+            this._renderGraphQLTypeType(arg.type),
+          )
+        ),
+      ),
+    ]);
+  }
+
+  public schemaExprs(
     schema: GraphQLSchema,
+    [types, interfaces, inputFieldDirectives]: ReturnType<typeof GeneratorContext["prepareInterfacesAndInputFieldDirectives"]>,
+  ): jen.Expr[] {
+    return [
+      ...[
+        // render type definitions
+        ...types
+          .map((type): [string, jen.Expr] => [type.name, this._renderGraphQLTypeDefinitions(type, interfaces, inputFieldDirectives)])
+          .sort(compareEntryKey),
+
+        // render directive definitions
+        ...schema.getDirectives()
+          .filter((d) => !isBuiltInDirective(d.name))
+          .map((directive): [string, jen.Expr] => [directive.name, this._renderGraphQLDirectiveDefinition(directive)])
+          .sort(compareEntryKey),
+      ].map(([, expr]) => expr),
+
+      // render schema
+      jen.const.id("schema").op("=").new.add(this._gql("GraphQLSchema")).call(jen.obj(
+        ...(schema.getQueryType()
+          ? [jen.prop("query", this._renderGraphQLTypeIdentifier(schema.getQueryType()!))]
+          : []),
+        ...(schema.getMutationType()
+          ? [jen.prop("mutation", this._renderGraphQLTypeIdentifier(schema.getMutationType()!))]
+          : []),
+        ...(schema.getSubscriptionType()
+          ? [jen.prop("subscription", this._renderGraphQLTypeIdentifier(schema.getSubscriptionType()!))]
+          : []),
+        jen.prop("types", jen.array(...types.map((type) => this._renderGraphQLTypeIdentifier(type)))),
+        jen.prop(
+          "directives",
+          jen.array(
+            ...Array.from(schema.getDirectives())
+              .filter((d) => !isBuiltInDirective(d.name))
+              .map((d) => this._renderGraphQLTypeIdentifier(d)),
+          ),
+        ),
+      )),
+
+      jen.export.default.id("schema"),
+    ];
+  }
+
+  public typesExprs(
+    schema: GraphQLSchema,
+    [types, interfaces, inputFieldDirectives]: ReturnType<typeof GeneratorContext["prepareInterfacesAndInputFieldDirectives"]>,
+  ): jen.Expr[] {
+    return [
+      ["", jen.const.id("setTypename").op("=").types(jen.id("T")).params(jen.id("v").op(":").id("T"), jen.id("t").op(":").string).op(":").id("T").op("=>").block(
+        jen.if(jen.op("!").id("v").op("||").typeof(jen.id("v")).op("!==").lit("object")).block(
+          jen.throw.new.id("Error").call(jen.lit("expected object")),
+        ),
+        jen.return(jen.id("Object").dot("assign").call(jen.id("v"), jen.obj(jen.prop(jen.id("__typename"), jen.id("t"))))),
+      )] as const,
+
+      // render type definitions
+      ...types
+        .map((type): [string, jen.Expr] => [type.name, jen.statements(...this._renderGraphQLTypeTypes(type, interfaces, inputFieldDirectives))])
+        .sort(compareEntryKey),
+
+      // render directive definitions
+      ...schema.getDirectives()
+        .filter((d) => !isBuiltInDirective(d.name))
+        .map((directive): [string, jen.Expr] => [directive.name, jen.statements(...this._renderGraphQLDirectiveTypes(directive))])
+        .sort(compareEntryKey),
+    ].map(([, expr]) => expr);
+  }
+
+  public schemaAndTypesExprs(
+    schema: GraphQLSchema,
+    [types, interfaces, inputFieldDirectives]: ReturnType<typeof GeneratorContext["prepareInterfacesAndInputFieldDirectives"]>,
+  ): jen.Expr[] {
+    return [
+      ...this.schemaExprs(schema, [types, interfaces, inputFieldDirectives]),
+      ...this.typesExprs(schema, [types, interfaces, inputFieldDirectives]),
+    ];
+  }
+
+  public renderFile(
     outfile: string,
+    renderStatements: (this: GeneratorContext) => jen.Expr[],
+  ): string {
+    const base = outfile.startsWith("/") ? outfile : path.resolve(outfile);
+
+    const statements = renderStatements.call(this);
+
+    const [localImports, externalImports] = partition(
+      Object.entries(this._pkgs.requires),
+      ([pkg]) => pkg.startsWith("/"),
+    );
+
+    return format(jen.statements(
+      renderImports(path.dirname(base), externalImports, this._pkgs.aliases, this._extMode),
+      renderImports(path.dirname(base), localImports, this._pkgs.aliases, this._extMode),
+      ...statements,
+    ).toString());
+  }
+
+  public static prepareInterfacesAndInputFieldDirectives(
+    schema: GraphQLSchema,
     options: GenerateOptions = {},
-  ): jen.Expr {
+  ) {
     if (options.fieldDirectivesInfo) {
       const names = new Set(Object.keys(options.fieldDirectivesInfo));
       for (const directive of schema.getDirectives()) {
@@ -930,8 +1139,6 @@ class SchemaGenerator {
 
         typesWithObjectFields = newTypesWithObjectFields;
       }
-
-      console.log(inputFieldDirectives["InviteMembersInput"], inputFieldDirectives["MemberInvitationInput"]);
     }
 
     const interfaces: Record<string, InterfaceImplementors> = {};
@@ -952,58 +1159,51 @@ class SchemaGenerator {
       }
     }
 
-    const generator = new SchemaGenerator(options);
-
-    const base = outfile.startsWith("/") ? outfile : path.join(Deno.cwd(), outfile);
-
-    const statements = [
-      ...[
-        ...types
-          .map((
-            type,
-          ): [string, jen.Expr] => [type.name, generator._renderGraphQLType(type, interfaces, inputFieldDirectives)])
-          .sort(compareEntryKey),
-
-        ...schema.getDirectives()
-          .filter((d) => !isBuiltInDirective(d.name))
-          .map((directive): [string, jen.Expr] => [directive.name, generator._renderGraphQLDirective(directive)])
-          .sort(compareEntryKey),
-      ].map(([, expr]) => expr),
-
-      jen.const.id("schema").op("=").new.add(generator._gql("GraphQLSchema")).call(jen.obj(
-        ...(schema.getQueryType()
-          ? [jen.prop("query", generator._renderGraphQLTypeIdentifier(schema.getQueryType()!))]
-          : []),
-        ...(schema.getMutationType()
-          ? [jen.prop("mutation", generator._renderGraphQLTypeIdentifier(schema.getMutationType()!))]
-          : []),
-        ...(schema.getSubscriptionType()
-          ? [jen.prop("subscription", generator._renderGraphQLTypeIdentifier(schema.getSubscriptionType()!))]
-          : []),
-        jen.prop("types", jen.array(...types.map((type) => generator._renderGraphQLTypeIdentifier(type)))),
-        jen.prop(
-          "directives",
-          jen.array(
-            ...Array.from(schema.getDirectives())
-              .filter((d) => !isBuiltInDirective(d.name))
-              .map((d) => generator._renderGraphQLTypeIdentifier(d)),
-          ),
-        ),
-      )),
-    ];
-
-    const [localImports, externalImports] = partition(
-      Object.entries(generator._pkgs.requires),
-      ([pkg]) => pkg.startsWith("/"),
-    );
-
-    return jen.statements(
-      renderImports(path.dirname(base), externalImports, generator._pkgs.aliases),
-      renderImports(path.dirname(base), localImports, generator._pkgs.aliases),
-      ...statements,
-      jen.export.default.id("schema"),
-    );
+    return [types, interfaces, inputFieldDirectives] as const;
   }
+}
+
+export function createGenerator(
+  schema: GraphQLSchema,
+  options: GenerateOptions,
+) {
+  const args = GeneratorContext.prepareInterfacesAndInputFieldDirectives(schema, options);
+  return {
+    generateSchema: (outfile: string) => new GeneratorContext(options).renderFile(
+      outfile,
+      function (this: GeneratorContext) {
+        return this.schemaExprs(schema, args);
+      },
+    ),
+    generateTypes: (outfile: string) => new GeneratorContext(options).renderFile(
+      outfile,
+      function (this: GeneratorContext) {
+        return this.typesExprs(schema, args);
+      },
+    ),
+    generate: (outfile: string) => new GeneratorContext(options).renderFile(
+      outfile,
+      function (this: GeneratorContext) {
+        return this.schemaAndTypesExprs(schema, args);
+      },
+    ),
+  }
+}
+
+export function generateSchema(
+  schema: GraphQLSchema,
+  outfile: string,
+  options: GenerateOptions = {},
+) {
+  return createGenerator(schema, options).generateSchema(outfile);
+}
+
+export function generateTypes(
+  schema: GraphQLSchema,
+  outfile: string,
+  options: GenerateOptions = {},
+) {
+  return createGenerator(schema, options).generateTypes(outfile);
 }
 
 export function generate(
@@ -1011,5 +1211,5 @@ export function generate(
   outfile: string,
   options: GenerateOptions = {},
 ) {
-  return format(SchemaGenerator.renderSchema(schema, outfile, options).toString());
+  return createGenerator(schema, options).generate(outfile);
 }

@@ -1,4 +1,4 @@
-import { keywords } from "./typescript.ts";
+import { keywords } from "./typescript.js";
 
 export class RequiredPackages {
   // map from symbol to module path
@@ -15,12 +15,12 @@ export class RequiredPackages {
     }
   }
 
-  public addRequires(pkg: string, name: string) {
+  public addRequires(pkg: string, name: string, alias?: string) {
     if (!(pkg in this.requires)) {
       this.requires[pkg] = new Set();
     }
 
-    let symbol = name;
+    let symbol = alias || name;
     if ((symbol in this.symbols || keywords.has(symbol)) && this.symbols[symbol] !== pkg) {
       for (
         let i = 1;

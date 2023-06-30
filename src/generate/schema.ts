@@ -1,3 +1,4 @@
+import { globIterate } from "glob";
 import {
   buildASTSchema,
   DocumentNode,
@@ -5,24 +6,34 @@ import {
   parse as parseDocument,
   Source,
   validateSchema,
-} from "npm:graphql@16.6.0";
-import { walk, type WalkEntry } from "https://deno.land/std@0.161.0/fs/mod.ts";
-import { basename, fromFileUrl } from "https://deno.land/std@0.161.0/path/mod.ts";
-import { mergeDocumentNodes } from "./merge.ts";
+} from "graphql";
+import fs from "fs/promises";
+import { join } from "path";
 
-export async function parse(path: URL): Promise<GraphQLSchema> {
-  const documentNodes: DocumentNode[] = [];
-  for await (const entry of glob(path)) {
-    if (entry.isFile) {
-      documentNodes.push(
-        parseDocument(
-          new Source(
-            await Deno.readTextFile(entry.path),
-            entry.path,
-          ),
-        ),
-      );
+import { mergeDocumentNodes } from "./merge.js";
+
+async function* findSchemaFiles(glob: string | string[]): AsyncGenerator<string> {
+  for await (const path of globIterate(glob)) {
+    const entry = await fs.stat(path);
+    if (entry.isFile()) {
+      yield path;
+    } else if (entry.isDirectory()) {
+      yield* findSchemaFiles(join(path, "**/*.graphql"));
     }
+  }
+}
+
+export async function parse(glob: string | string[]): Promise<GraphQLSchema> {
+  const documentNodes: DocumentNode[] = [];
+  for await (const entry of findSchemaFiles(glob)) {
+    documentNodes.push(
+      parseDocument(
+        new Source(
+          await fs.readFile(entry, "utf-8"),
+          entry,
+        ),
+      ),
+    );
   }
 
   if (!documentNodes.length) {
@@ -36,24 +47,4 @@ export async function parse(path: URL): Promise<GraphQLSchema> {
   }
 
   return schema;
-}
-
-async function* glob(path: URL): AsyncIterable<WalkEntry> {
-  const stat = await Deno.stat(path);
-  if (stat.isFile) {
-    yield {
-      name: basename(fromFileUrl(path)),
-      path: fromFileUrl(path),
-      isFile: true,
-      isDirectory: false,
-      isSymlink: false,
-    };
-    return;
-  }
-
-  for await (const entry of walk(path)) {
-    if (entry.isFile && entry.path.endsWith(".graphql")) {
-      yield entry;
-    }
-  }
 }

@@ -1,13 +1,15 @@
-import { RequiredPackages } from "./packages.ts";
-import jen from "https://raw.githubusercontent.com/ssttevee/deno-jen/d551218b35e530bec1bda87bab4a0d4b923daa13/mod.ts";
+import { jen } from "jennifer-js";
+
+import { RequiredPackages } from "./packages.js";
 
 export interface SymbolReference {
   module?: string;
   symbol: string;
+  alias?: string;
   property?: string;
 }
 
-export function renderSymbolReference(pkgs: RequiredPackages, ref: SymbolReference): jen.Expr {
-  const ns = (ref.module ? jen.id(pkgs.addRequires(ref.module, ref.symbol)) : jen.id(ref.symbol));
+export function renderSymbolReference(pkgs: RequiredPackages, ref: SymbolReference, alias?: string): jen.Expr {
+  const ns = (ref.module ? jen.id(pkgs.addRequires(ref.module, ref.symbol, alias ?? ref.alias)) : jen.id(ref.symbol));
   return ref.property ? ns.dot(ref.property) : ns;
 }

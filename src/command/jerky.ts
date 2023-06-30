@@ -1,77 +1,92 @@
-import { Command } from "https://deno.land/x/cliffy@v0.25.4/command/command.ts";
-import { parse as parseScalars } from "../generate/scalars.ts";
-import { parse as parseSchema } from "../generate/schema.ts";
-import { parse as parseResolvers, parseTypeResolvers } from "../generate/resolvers.ts";
-import { generate } from "../generate/generate.ts";
+import { program } from "commander";
+import fs from "fs/promises";
+import path from "path";
 
-function normalizePath(path: string): URL {
-  try {
-    return new URL(path);
-  } catch {
-    // it's probably a path
-  }
+import {
+  parseScalars,
+  parseSchema,
+  parseResolvers,
+  parseTypeResolvers,
+  generate,
+} from "../generate/index.js";
 
-  if (path.startsWith("/")) {
-    return new URL(`file://${path}`);
-  }
-
-  return new URL(path, `file://${Deno.cwd()}/`);
-}
-
-const {
-  args: [schema = "."],
-  options: {
-    out = "schema_gen.ts",
-    graphql = "graphql",
-    scalars,
-    resolvers,
-    subscribers,
-    fieldDirectives,
-    inputDirectives,
-  },
-} = await new Command()
+program
   .name("jerky")
   .version("0.1.0")
   .description("Schema-first GraphQL typescript code generator")
-  .arguments("[schema:string]")
-  .option("-o, --out <destination:string>", "Path to write schema_gen.ts.")
-  .option("--graphql <module:string>", "graphql module import specifier.")
-  .option("--scalars <module:string>", "scalars module import specifier.")
-  .option("--resolvers <directory:string>", "resolvers directory path.")
-  .option("--subscribers <module:string>", "subscriber module import specifier.")
-  .option("--field-directives <module:string>", "field directives module import specifier.")
-  .option("--input-directives <module:string>", "input directives module import specifier.")
-  .parse(Deno.args);
+  .argument("[schema]", "Path to schema file or directory.")
+  .option("-o, --out <destination>", "Path to write schema_gen.ts.")
+  .option("--graphql <module>", "graphql module import specifier.")
+  .option("--scalars <module>", "scalars module import specifier.")
+  .option("--resolvers <directory>", "resolvers directory path.")
+  .option("--subscribers <module>", "subscriber module import specifier.")
+  .option("--field-directives <module>", "field directives module import specifier.")
+  .option("--input-directives <module>", "input directives module import specifier.")
+  .option("--ext <mode>", "whether \"keep\", \"replace\", or \"omit\" the .ts extension in import statements.")
+  .showHelpAfterError(true);
 
-const outfile = normalizePath(out);
-if (!outfile.pathname.endsWith("/")) {
-  // test if it's a directory
-  try {
-    const stat = await Deno.stat(outfile);
-    if (stat.isDirectory) {
-      outfile.pathname += "/";
+program.parse();
+
+const {
+  out = "schema_gen.ts",
+  graphql = "graphql",
+  scalars,
+  resolvers,
+  subscribers,
+  fieldDirectives,
+  inputDirectives,
+  ext = "omit",
+} = program.opts();
+const [schema = "."] = program.args;
+
+(async () => {
+  let outfile = out;
+  if (!outfile.pathname.endsWith("/")) {
+    // test if it's a directory
+    try {
+      const stat = await fs.stat(outfile);
+      if (stat.isDirectory()) {
+        outfile += "/";
+      }
+    } catch {
+      // probably doesn't exist yet
     }
-  } catch {
-    // probably doesn't exist yet
   }
-}
 
-if (outfile.pathname.endsWith("/")) {
-  outfile.pathname += "schema_gen.ts";
-}
+  if (outfile.endsWith("/")) {
+    outfile += "schema_gen.ts";
+  }
 
-if (!outfile.pathname.endsWith(".ts")) {
-  outfile.pathname += ".ts";
-}
+  if (!outfile.endsWith(".ts")) {
+    outfile += ".ts";
+  }
 
-await Deno.writeTextFile(
-  outfile,
-  await generate(await parseSchema(normalizePath(schema)), outfile.pathname, {
-    scalarsInfo: scalars ? await parseScalars(normalizePath(scalars)) : undefined,
-    fieldDirectivesInfo: fieldDirectives ? await parseTypeResolvers("", normalizePath(fieldDirectives)) : undefined,
-    inputDirectivesInfo: inputDirectives ? await parseTypeResolvers("", normalizePath(inputDirectives)) : undefined,
-    resolversInfo: resolvers ? await parseResolvers(normalizePath(resolvers)) : undefined,
-    subscribersInfo: subscribers ? await parseTypeResolvers("Subscription", normalizePath(subscribers)) : undefined,
-    graphqlModuleSpecifier: graphql,
-  }),
-);
+  switch (ext) {
+    default:
+      throw new Error(`invalid mode for --ext: ${ext}`);
+
+    case "keep":
+    case "replace":
+    case "omit":
+  }
+
+  await fs.writeFile(
+    outfile,
+    generate(await parseSchema(path.resolve(schema)), outfile.pathname, {
+      scalarsInfo: scalars ? await parseScalars(scalars) : undefined,
+      fieldDirectivesInfo: fieldDirectives ? await parseTypeResolvers("", fieldDirectives) : undefined,
+      inputDirectivesInfo: inputDirectives ? await parseTypeResolvers("", inputDirectives) : undefined,
+      resolversInfo: resolvers ? await parseResolvers(resolvers) : undefined,
+      subscribersInfo: subscribers ? await parseTypeResolvers("Subscription", subscribers) : undefined,
+      graphqlModuleSpecifier: graphql,
+      extMode: ext,
+    }),
+  );
+})().catch((err) => {
+  console.error(err.message);
+  console.log();
+
+  if (process.argv.length === 2 || (process.argv.length === 3 && process.argv[2] === "help")) {
+    program.outputHelp();
+  }
+});

@@ -30,8 +30,8 @@ import {
   TypeNode,
   UnionTypeDefinitionNode,
   ValueNode,
-} from "npm:graphql@16.6.0";
-import { zip } from "https://deno.land/std@0.162.0/collections/zip.ts";
+} from "graphql";
+import zip from "just-zip-it";
 
 function locLineColumn(loc: Location): [number, number] {
   const head = loc.source.body.slice(0, loc.start);
@@ -54,42 +54,44 @@ function setTraceToSchema(
   name: string,
   loc?: Location,
 ) {
-  // this is required for the magic to work
-  const _ = err.stack;
+  if ((globalThis as any).Deno) {
+    // this is required for the magic to work
+    const _ = err.stack;
 
-  if (loc) {
-    const trace = (err as any).__callSiteEvals;
-    const [lineNumber, columnNumber] = locLineColumn(loc);
+    if (loc) {
+      const trace = (err as any).__callSiteEvals;
+      const [lineNumber, columnNumber] = locLineColumn(loc);
 
-    // NOTE: this is deno magic
-    // @see https://github.com/denoland/deno/blob/b1b418b81a13ede548273665e83c1bc5a97dffcd/core/error.rs#L275
-    Object.defineProperty(
-      err,
-      "__callSiteEvals",
-      {
-        get: () => [
-          {
-            this: undefined,
-            typeName: null,
-            function: undefined,
-            functionName: name,
-            methodName: null,
-            fileName: "file://" + loc.source.name,
-            lineNumber,
-            columnNumber,
-            evalOrigin: undefined,
-            isToplevel: true,
-            isEval: false,
-            isNative: false,
-            isConstructor: false,
-            isAsync: false,
-            isPromiseAll: false,
-            promiseIndex: null,
-          },
-          ...trace,
-        ],
-      },
-    );
+      // NOTE: this is deno magic
+      // @see https://github.com/denoland/deno/blob/b1b418b81a13ede548273665e83c1bc5a97dffcd/core/error.rs#L275
+      Object.defineProperty(
+        err,
+        "__callSiteEvals",
+        {
+          get: () => [
+            {
+              this: undefined,
+              typeName: null,
+              function: undefined,
+              functionName: name,
+              methodName: null,
+              fileName: "file://" + loc.source.name,
+              lineNumber,
+              columnNumber,
+              evalOrigin: undefined,
+              isToplevel: true,
+              isEval: false,
+              isNative: false,
+              isConstructor: false,
+              isAsync: false,
+              isPromiseAll: false,
+              promiseIndex: null,
+            },
+            ...trace,
+          ],
+        },
+      );
+    }
   }
 
   return err;
@@ -301,9 +303,9 @@ function mergeFieldDefinitionNodes(
         }
 
         console.warn(
-          `Warning: there is more than one declaration for ${name}.${f.name.value}` +
-            traceLine(f.loc) +
-            traceLine(prev.loc, "previously ") + "\n",
+          `WARNING: there is more than one declaration for ${name}.${f.name.value}` +
+          traceLine(f.loc) +
+          traceLine(prev.loc, "previously ") + "\n",
         );
 
         fields[f.name.value] = {
@@ -354,9 +356,9 @@ function mergeInputValueDefinitionNodes(
         }
 
         console.warn(
-          `Warning: there is more than one declaration for ${name}.${f.name.value}` +
-            traceLine(f.loc) +
-            traceLine(prev.loc, "previously ") + "\n",
+          `WARNING: there is more than one declaration for ${name}.${f.name.value}` +
+          traceLine(f.loc) +
+          traceLine(prev.loc, "previously ") + "\n",
         );
 
         fields[f.name.value] = {
@@ -582,11 +584,10 @@ export function mergeDocumentNodes(
         prevDefinition.description.value !== definition.description.value
       ) {
         console.warn(
-          `Warning: different descriptions for type ${prevDefinition.name.value}: ${
-            JSON.stringify(prevDefinition.description.value)
+          `WARNING: different descriptions for type ${prevDefinition.name.value}: ${JSON.stringify(prevDefinition.description.value)
           } and ${JSON.stringify(definition.description.value)}` +
-            traceLine(definition.description.loc) +
-            traceLine(prevDefinition.description.loc, "previously ") + "\n",
+          traceLine(definition.description.loc) +
+          traceLine(prevDefinition.description.loc, "previously ") + "\n",
         );
       }
 
