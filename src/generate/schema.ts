@@ -10,6 +10,7 @@ import {
 import fs from "fs/promises";
 import { join } from "path";
 
+import { createMatcher, MatchPattern } from "./matcher.js";
 import { mergeDocumentNodes } from "./merge.js";
 
 async function* findSchemaFiles(glob: string | string[]): AsyncGenerator<string> {
@@ -23,9 +24,14 @@ async function* findSchemaFiles(glob: string | string[]): AsyncGenerator<string>
   }
 }
 
-export async function parse(glob: string | string[]): Promise<GraphQLSchema> {
+export async function parse(glob: string | string[], ignore?: MatchPattern): Promise<GraphQLSchema> {
+  const shouldIgnore = createMatcher(ignore);
   const documentNodes: DocumentNode[] = [];
   for await (const entry of findSchemaFiles(glob)) {
+    if (shouldIgnore(entry)) {
+      continue;
+    }
+
     documentNodes.push(
       parseDocument(
         new Source(
