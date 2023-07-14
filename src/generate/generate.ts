@@ -260,58 +260,62 @@ class GeneratorContext {
       & Partial<Pick<GraphQLField<any, any>, "args">>
       & { defaultValue?: any },
     inputFieldDirectives: Record<string, Record<string, string[]>>,
+    noresolver?: boolean
   ): jen.Expr {
-    let resolver = this._resolversInfo[type.name]?.[f.name];
-    if (type instanceof GraphQLObjectType && !resolver) {
-      // try to find resolver in interface in the declaration order
-      for (const iface of type.getInterfaces()) {
-        if ((resolver = this._resolversInfo[iface.name]?.[f.name])) {
-          break;
+    let resolveFn: jen.Expr | undefined;
+    if (!noresolver) {
+      let resolver = this._resolversInfo[type.name]?.[f.name];
+      if (type instanceof GraphQLObjectType && !resolver) {
+        // try to find resolver in interface in the declaration order
+        for (const iface of type.getInterfaces()) {
+          if ((resolver = this._resolversInfo[iface.name]?.[f.name])) {
+            break;
+          }
         }
       }
-    }
 
-    let resolveFn = resolver && renderSymbolReference(this._pkgs, resolver);
-    if (f.astNode?.directives?.length) {
-      // apply directives in reverse order
-      for (const directive of Array.from(f.astNode.directives).reverse()) {
-        const ref = this._fieldDirectivesInfo[directive.name.value];
-        if (!ref) {
-          continue;
+      resolveFn = resolver && renderSymbolReference(this._pkgs, resolver);
+      if (f.astNode?.directives?.length) {
+        // apply directives in reverse order
+        for (const directive of Array.from(f.astNode.directives).reverse()) {
+          const ref = this._fieldDirectivesInfo[directive.name.value];
+          if (!ref) {
+            continue;
+          }
+
+          if (!resolveFn) {
+            resolveFn = jen.arrow(jen.id("source").op(":").any).id("source").dot(f.name);
+          }
+
+          resolveFn = renderSymbolReference(this._pkgs, ref, `apply${pascalCase(directive.name.value)}FieldDirective`).call(
+            resolveFn,
+            ...(directive.arguments?.length ? [this._renderArgumentNodes(directive.arguments)] : []),
+          );
         }
+      }
 
-        if (!resolveFn) {
-          resolveFn = jen.arrow(jen.id("source").op(":").any).id("source").dot(f.name);
-        }
-
-        resolveFn = renderSymbolReference(this._pkgs, ref, `apply${pascalCase(directive.name.value)}FieldDirective`).call(
-          resolveFn,
-          ...(directive.arguments?.length ? [this._renderArgumentNodes(directive.arguments)] : []),
+      if (resolveFn) {
+        // args probably don't need to be transformed if there's no resolver
+        const argsWithDirectives = truthify(
+          f.args?.map((arg) => this._findInputDirectiveInfoFromArgOrField(arg, inputFieldDirectives)) ?? [],
         );
-      }
-    }
-
-    if (resolveFn) {
-      // args probably don't need to be transformed if there's no resolver
-      const argsWithDirectives = truthify(
-        f.args?.map((arg) => this._findInputDirectiveInfoFromArgOrField(arg, inputFieldDirectives)) ?? [],
-      );
-      if (argsWithDirectives.length) {
-        resolveFn = jen.parens(
-          jen.params(jen.prop("next", this._gql("GraphQLFieldResolver").types(jen.any, jen.any))).op(":")
-            .add(this._gql("GraphQLFieldResolver"))
-            .types(jen.any, jen.any, jen.id(type.name).dot(pascalCase(f.name + "_args")))
-            .op("=>").arrow(jen.id("source"), jen.id("args"), jen.id("context"), jen.id("info")).id("next").call(
-              jen.id("source"),
-              this._renderInputFieldsWithDirectives(
-                jen.id("args"),
-                argsWithDirectives,
-                argsWithDirectives.length < f.args!.length,
+        if (argsWithDirectives.length) {
+          resolveFn = jen.parens(
+            jen.params(jen.prop("next", this._gql("GraphQLFieldResolver").types(jen.any, jen.any))).op(":")
+              .add(this._gql("GraphQLFieldResolver"))
+              .types(jen.any, jen.any, jen.id(type.name).dot(pascalCase(f.name + "_args")))
+              .op("=>").arrow(jen.id("source"), jen.id("args"), jen.id("context"), jen.id("info")).id("next").call(
+                jen.id("source"),
+                this._renderInputFieldsWithDirectives(
+                  jen.id("args"),
+                  argsWithDirectives,
+                  argsWithDirectives.length < f.args!.length,
+                ),
+                jen.id("context"),
+                jen.id("info"),
               ),
-              jen.id("context"),
-              jen.id("info"),
-            ),
-        ).call(resolveFn);
+          ).call(resolveFn);
+        }
       }
     }
 
@@ -338,7 +342,7 @@ class GeneratorContext {
         // NOTE: Resolver functions on interface definitions are not used by the default graphql-js
         //       executor implementation, but nonetheless accessible by a potential alternate implementation.
         resolveFn && jen.prop("resolve", jen.parens(resolveFn).as.any),
-        subscriber && jen.prop("subscribe", renderSymbolReference(this._pkgs, subscriber)),
+        subscriber && jen.prop("subscribe", jen.parens(renderSymbolReference(this._pkgs, subscriber)).as.any),
       ]),
     );
   }
@@ -346,11 +350,12 @@ class GeneratorContext {
   private _renderFieldsThunk(
     type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
     inputFieldDirectives: Record<string, Record<string, string[]>>,
+    noresolver?: boolean,
   ): jen.Expr {
     return jen.arrow().parens(jen.obj(
       ...Object.values(type.getFields())
         .sort(compareName)
-        .map((field) => jen.prop(field.name, this._renderFieldObject(type, field, inputFieldDirectives))),
+        .map((field) => jen.prop(field.name, this._renderFieldObject(type, field, inputFieldDirectives, noresolver))),
     ));
   }
 
@@ -481,7 +486,7 @@ class GeneratorContext {
     return jen.new.add(this._gql("GraphQLObjectType")).call(
       jen.obj(
         jen.prop("name", jen.lit(type.name)),
-        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives, type.name === "Subscription")),
         ...truthify([
           type.description && jen.prop("description", jen.lit(type.description)),
           typeInterfaces.length && jen.prop(
@@ -759,7 +764,7 @@ class GeneratorContext {
     return jen.new.add(this._gql("GraphQLInputObjectType")).call(
       jen.obj(
         jen.prop("name", jen.lit(type.name)),
-        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives, true)),
         ...truthify([
           type.description && jen.prop("description", jen.lit(type.description)),
         ]),
