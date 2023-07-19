@@ -56,6 +56,14 @@ function refFromTypeReferenceNode(
   }
 
   const typeName = typeNode.typeName.text;
+  if (typeNode.typeArguments?.length) {
+      if (typeName !== 'Promise') {
+          throw new Error('TODO: handle type arguments');
+      }
+
+      return refFromTypeNode(typeNode.typeArguments[0], source);
+  }
+
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement)) {
       // search imports
