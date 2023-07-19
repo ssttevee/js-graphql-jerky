@@ -259,7 +259,7 @@ export async function parse(path: string): Promise<Record<string, ScalarInfo>> {
     } : reconcileScalarType(
       name,
       [
-        fnsInfo?.serializeFunc?.declaration?.parameters?.[0]?.type,
+        // NOTE: omit serialize input type because it is supposed to be `unknown`
         fnsInfo?.parseValueFunc?.declaration?.type,
         fnsInfo?.parseLiteralFunc?.declaration?.type,
       ],
