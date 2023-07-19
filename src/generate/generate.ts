@@ -21,7 +21,7 @@ import {
   Kind,
   ValueNode,
 } from "graphql";
-import jen from "jennifer-js";
+import jen, { Expr } from "jennifer-js";
 import format from "jennifer-js/format";
 import partition from "just-partition";
 import pascalCase from "just-pascal-case";
@@ -45,17 +45,10 @@ function compareName<T extends { name: string }>(
   return a.localeCompare(b);
 }
 
-function isPrimitiveType(type: GraphQLNamedType) {
-  switch (type.name) {
-    case "ID":
-    case "Int":
-    case "Float":
-    case "String":
-    case "Boolean":
-      return true;
-  }
+const PRIMITIVE_TYPES = new Set(["ID", "Int", "Float", "String", "Boolean"]);
 
-  return false;
+function isPrimitiveType(type: GraphQLNamedType) {
+  return PRIMITIVE_TYPES.has(type.name);
 }
 
 function importAlias(line: string): string {
@@ -992,6 +985,24 @@ class GeneratorContext {
           .map((directive): [string, jen.Expr] => [directive.name, this._renderGraphQLDirectiveDefinition(directive)])
           .sort(compareEntryKey),
       ].map(([, expr]) => expr),
+
+      ...Array.from(PRIMITIVE_TYPES)
+        .flatMap((type) => {
+          const info = this._scalarsInfo[type];
+          if (!info) {
+            return [];
+          }
+
+          return [
+            jen.statements(
+              ...[
+                info.serializeFunc && this._gql("GraphQL" + type).dot("serialize").op("=").parens(renderSymbolReference(this._pkgs, info.serializeFunc).as.any),
+                info.parseValueFunc && this._gql("GraphQL" + type).dot("parseValue").op("=").parens(renderSymbolReference(this._pkgs, info.parseValueFunc).as.any),
+                info.parseLiteralFunc && this._gql("GraphQL" + type).dot("parseLiteral").op("=").parens(renderSymbolReference(this._pkgs, info.parseLiteralFunc).as.any),
+              ].filter(Boolean) as Expr[],
+            )
+          ]
+        }),
 
       // render schema
       jen.const.id("schema").op("=").new.add(this._gql("GraphQLSchema")).call(jen.obj(
