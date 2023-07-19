@@ -17,7 +17,7 @@ export interface Declaration {
   name: string;
 }
 
-export type Exports = Record<string, Declaration>;
+export type Exports = Record<string, Declaration[]>;
 
 function resolveModule(
   specifier: string,
@@ -45,20 +45,23 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
     if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) {
       if (node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
         if (node.modifiers.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)) {
-          exports.default = { declaration: node, source, name: "default" };
+          (exports.default || (exports.default = [])).push({ declaration: node, source, name: "default" });
         } else if (node.name) {
-          exports[node.name.getText(source)] = { declaration: node, source, name: node.name.getText(source) };
+          const name = node.name.getText(source);
+          (exports[name] || (exports[name] = [])).push({ declaration: node, source, name: name });
         }
       }
     } else if (ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node)) {
       if (node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
-        exports[node.name.getText(source)] = { declaration: node, source, name: node.name.getText(source) };
+        const name = node.name.getText(source);
+        (exports[name] || (exports[name] = [])).push({ declaration: node, source, name: name });
       }
     } else if (ts.isVariableStatement(node)) {
       if (node.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
         for (const decl of node.declarationList.declarations) {
           if (decl.name) {
-            exports[decl.name.getText(source)] = { declaration: decl, source, name: decl.name.getText(source) };
+            const name = decl.name.getText(source);
+            (exports[name] || (exports[name] = [])).push({ declaration: decl, source, name: name });
           }
         }
       }
@@ -82,7 +85,7 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
               );
             }
 
-            exports[name] = moduleExports[name];
+            (exports[name] || (exports[name] = [])).push(...moduleExports[name]);
           }
         } else {
           for (const element of node.exportClause.elements) {
@@ -90,7 +93,6 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
               name: element.name.text,
               property: element.propertyName?.text,
             });
-            // exports[element.name.getText(source)] = { declaration: element, source };
           }
         }
       } else if (!node.exportClause && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -112,62 +114,68 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
       if (ts.isVariableStatement(statement)) {
         for (const decl of statement.declarationList.declarations) {
           if (ts.isIdentifier(decl.name) && decl.name.getText(source) in names) {
-            exports[names[decl.name.getText(source)]] = {
+            const name = names[decl.name.getText(source)];
+            (exports[name] || (exports[name] = [])).push({
               declaration: decl,
               source,
               name: names[decl.name.getText(source)],
-            };
+            });
           }
         }
       }
 
       if (ts.isFunctionDeclaration(statement)) {
         if (statement.name && ts.isIdentifier(statement.name) && statement.name.getText(source) in names) {
-          exports[names[statement.name.getText(source)]] = {
+          const name = names[statement.name.getText(source)];
+          (exports[name] || (exports[name] = [])).push({
             declaration: statement,
             source,
             name: names[statement.name.getText(source)],
-          };
+          });
         }
       }
 
       if (ts.isClassDeclaration(statement)) {
         if (statement.name && ts.isIdentifier(statement.name) && statement.name.getText(source) in names) {
-          exports[names[statement.name.getText(source)]] = {
+          const name = names[statement.name.getText(source)];
+          (exports[name] || (exports[name] = [])).push({
             declaration: statement,
             source,
             name: names[statement.name.getText(source)],
-          };
+          });
         }
       }
 
       if (ts.isTypeAliasDeclaration(statement)) {
         if (statement.name && ts.isIdentifier(statement.name) && statement.name.getText(source) in names) {
-          exports[names[statement.name.getText(source)]] = {
+          const name = names[statement.name.getText(source)];
+          (exports[name] || (exports[name] = [])).push({
             declaration: statement,
             source,
             name: names[statement.name.getText(source)],
-          };
+          });
         }
       }
 
       if (ts.isInterfaceDeclaration(statement)) {
         if (statement.name && ts.isIdentifier(statement.name) && statement.name.getText(source) in names) {
-          exports[names[statement.name.getText(source)]] = {
+          const name = names[statement.name.getText(source)];
+          (exports[name] || (exports[name] = [])).push({
             declaration: statement,
             source,
             name: names[statement.name.getText(source)],
-          };
+          });
         }
       }
 
       if (ts.isEnumDeclaration(statement)) {
         if (statement.name && ts.isIdentifier(statement.name) && statement.name.getText(source) in names) {
-          exports[names[statement.name.getText(source)]] = {
+          const name = names[statement.name.getText(source)];
+          (exports[name] || (exports[name] = [])).push({
             declaration: statement,
             source,
             name: names[statement.name.getText(source)],
-          };
+          });
         }
       }
 
@@ -201,11 +209,12 @@ export async function findExports(source: ts.SourceFile, resolveModuleFn = resol
                 );
               }
 
-              exports[names[element.propertyName.getText(source)]] = {
+              const name = names[element.propertyName.getText(source)];
+              (exports[name] || (exports[name] = [])).push({
                 declaration: element,
                 source,
                 name: names[element.propertyName.getText(source)],
-              };
+              });
             }
           }
         }

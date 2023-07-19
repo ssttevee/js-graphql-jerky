@@ -10,7 +10,7 @@ async function parseResolverFile(path: string): Promise<Record<string, SymbolRef
   return Object.fromEntries(
     Object.entries((await parseModule(path)).exports)
       .flatMap(
-        ([name, { declaration }]): [string, SymbolReference][] => {
+        ([name, decls]): [string, SymbolReference][] => decls.flatMap(({ declaration }) => {
           if (ts.isVariableDeclaration(declaration) && declaration.initializer) {
             if (ts.isFunctionExpression(declaration.initializer)) {
               return [[name, { module: path, symbol: name }]];
@@ -26,7 +26,7 @@ async function parseResolverFile(path: string): Promise<Record<string, SymbolRef
           }
 
           return [];
-        },
+        }),
       ),
   );
 }

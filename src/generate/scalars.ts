@@ -236,21 +236,23 @@ export async function parse(path: string): Promise<Record<string, ScalarInfo>> {
   const scalarTypeNodes: Record<string, ts.TypeNode> = {};
   const sources: Record<string, ts.SourceFile> = {};
 
-  for (const [name, { declaration, source }] of Object.entries((await parseModule(path)).exports)) {
-    sources[name] = source;
-    if (ts.isVariableDeclaration(declaration)) {
-      if (declaration.initializer && ts.isObjectLiteralExpression(declaration.initializer)) {
-        scalarFnsInfos[name] = scalarInfoFromObjectLiteralExpression(name, new URL(source.fileName).toString(), declaration.initializer.properties);
-      }
-    } else if (ts.isTypeAliasDeclaration(declaration)) {
-      if (declaration.typeParameters?.length) {
-        console.log(`WARNING: skipping scalar type ${name}: type parameters are not supported`);
-        continue;
-      }
+  for (const [name, decls] of Object.entries((await parseModule(path)).exports)) {
+    for (const { declaration, source } of decls) {
+      sources[name] = source;
+      if (ts.isVariableDeclaration(declaration)) {
+        if (declaration.initializer && ts.isObjectLiteralExpression(declaration.initializer)) {
+          scalarFnsInfos[name] = scalarInfoFromObjectLiteralExpression(name, new URL(source.fileName).toString(), declaration.initializer.properties);
+        }
+      } else if (ts.isTypeAliasDeclaration(declaration)) {
+        if (declaration.typeParameters?.length) {
+          console.log(`WARNING: skipping scalar type ${name}: type parameters are not supported`);
+          continue;
+        }
 
-      const ref = refFromTypeNode(declaration.type, source);
-      if (ref) {
-        scalarTypeNodes[name] = declaration.type;
+        const ref = refFromTypeNode(declaration.type, source);
+        if (ref) {
+          scalarTypeNodes[name] = declaration.type;
+        }
       }
     }
   }
