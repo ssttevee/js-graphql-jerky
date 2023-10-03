@@ -1,4 +1,5 @@
 import {
+  ASTNode,
   ConstArgumentNode,
   DirectiveLocation,
   getNamedType,
@@ -102,6 +103,10 @@ function renderImports(
   );
 }
 
+function renderAstNode(astNode: ASTNode): jen.Expr {
+  return jen.id("JSON").dot("parse").call(jen.literal(JSON.stringify(astNode, (key, value) => key === "loc" ? undefined : value)))
+}
+
 function isBuiltInDirective(name: string): boolean {
   // https://spec.graphql.org/draft/#sec-Type-System.Directives.Built-in-Directives
   switch (name) {
@@ -132,11 +137,13 @@ export interface GenerateOptions {
   subscribersInfo?: Awaited<ReturnType<typeof import("./resolvers.js").parseTypeResolvers>>;
   graphqlModuleSpecifier?: string;
   extMode?: "omit" | "replace" | "keep";
+  includeAstNodes?: boolean;
 }
 
 interface TypeRenderContext {
   implementors: InterfaceImplementors;
   inputFieldDirectives: Record<string, Record<string, string[]>>;
+  includeAstNodes?: boolean;
 }
 
 class GeneratorContext {
@@ -253,6 +260,7 @@ class GeneratorContext {
       & Partial<Pick<GraphQLField<any, any>, "args">>
       & { defaultValue?: any },
     inputFieldDirectives: Record<string, Record<string, string[]>>,
+    astNodeExpr: jen.Expr | undefined | null,
     noresolver?: boolean
   ): jen.Expr {
     let resolveFn: jen.Expr | undefined;
@@ -336,6 +344,8 @@ class GeneratorContext {
         //       executor implementation, but nonetheless accessible by a potential alternate implementation.
         resolveFn && jen.prop("resolve", jen.parens(resolveFn).as.any),
         subscriber && jen.prop("subscribe", jen.parens(renderSymbolReference(this._pkgs, subscriber)).as.any),
+
+        astNodeExpr && jen.prop("astNode", astNodeExpr),
       ]),
     );
   }
@@ -343,12 +353,29 @@ class GeneratorContext {
   private _renderFieldsThunk(
     type: GraphQLObjectType | GraphQLInterfaceType | GraphQLInputObjectType,
     inputFieldDirectives: Record<string, Record<string, string[]>>,
+    includeAstNodes: boolean | undefined,
     noresolver?: boolean,
   ): jen.Expr {
+    let astNodeExpr: jen.Expr | undefined;
+    if (includeAstNodes) {
+      astNodeExpr = jen.id(type.name + "Type").dot("astNode").op("?").dot("fields").op("?.");
+    }
+
     return jen.arrow().parens(jen.obj(
       ...Object.values(type.getFields())
-        .sort(compareName)
-        .map((field) => jen.prop(field.name, this._renderFieldObject(type, field, inputFieldDirectives, noresolver))),
+        .map((field, i) => [field, i])
+        .sort(([a], [b]) => compareName(a, b))
+        .map(([field, i]) => jen.prop(
+          field.name,
+          this._renderFieldObject(
+            type,
+            field,
+            inputFieldDirectives,
+            astNodeExpr?.index(i),
+            noresolver,
+          ),
+        ),
+      ),
     ));
   }
 
@@ -473,13 +500,13 @@ class GeneratorContext {
 
   private _renderGraphQLObjectTypeDefinition(
     type: GraphQLObjectType,
-    { inputFieldDirectives }: TypeRenderContext,
+    { inputFieldDirectives, includeAstNodes }: TypeRenderContext,
   ): jen.Expr {
     const typeInterfaces = type.getInterfaces();
     return jen.new.add(this._gql("GraphQLObjectType")).call(
       jen.obj(
         jen.prop("name", jen.lit(type.name)),
-        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives, type.name === "Subscription")),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives, includeAstNodes, type.name === "Subscription")),
         ...truthify([
           type.description && jen.prop("description", jen.lit(type.description)),
           typeInterfaces.length && jen.prop(
@@ -492,6 +519,7 @@ class GeneratorContext {
               ),
             ),
           ),
+          includeAstNodes && type.astNode && jen.prop("astNode", renderAstNode(type.astNode)),
         ]),
       ),
     ).as.add(this._gql("GraphQLObjectType"));
@@ -594,14 +622,15 @@ class GeneratorContext {
 
   private _renderGraphQLInterfaceTypeDefinition(
     type: GraphQLInterfaceType,
-    { implementors: { implementors }, inputFieldDirectives }: TypeRenderContext,
+    { inputFieldDirectives, includeAstNodes }: TypeRenderContext,
   ): jen.Expr {
     return jen.new.add(this._gql("GraphQLInterfaceType")).call(
       jen.obj(
         jen.prop("name", jen.lit(type.name)),
-        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives)),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives, includeAstNodes)),
         ...truthify([
           type.description && jen.prop("description", jen.lit(type.description)),
+          includeAstNodes && type.astNode && jen.prop("astNode", renderAstNode(type.astNode)),
         ]),
       ),
     ).as.add(this._gql("GraphQLInterfaceType"));
@@ -752,14 +781,15 @@ class GeneratorContext {
 
   private _renderGraphQLInputObjectTypeDefinition(
     type: GraphQLInputObjectType,
-    { inputFieldDirectives }: TypeRenderContext,
+    { inputFieldDirectives, includeAstNodes }: TypeRenderContext,
   ): jen.Expr {
     return jen.new.add(this._gql("GraphQLInputObjectType")).call(
       jen.obj(
         jen.prop("name", jen.lit(type.name)),
-        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives, true)),
+        jen.prop("fields", this._renderFieldsThunk(type, inputFieldDirectives, includeAstNodes, true)),
         ...truthify([
           type.description && jen.prop("description", jen.lit(type.description)),
+          includeAstNodes && type.astNode && jen.prop("astNode", renderAstNode(type.astNode)),
         ]),
       ),
     );
@@ -905,12 +935,14 @@ class GeneratorContext {
     type: GraphQLType,
     interfaces: Record<string, InterfaceImplementors>,
     inputFieldDirectives: Record<string, Record<string, string[]>>,
+    includeAstNodes?: boolean,
   ): jen.Expr {
     return jen.const.add(this._renderGraphQLTypeIdentifier(type)).op("=").add(
       this._getRenderDefintionFnForType(type)(
         {
           implementors: interfaces[(type as { name: string }).name],
           inputFieldDirectives,
+          includeAstNodes,
         },
       )
     );
@@ -929,7 +961,7 @@ class GeneratorContext {
     );
   }
 
-  private _renderGraphQLDirectiveDefinition(directive: GraphQLDirective): jen.Expr {
+  private _renderGraphQLDirectiveDefinition(directive: GraphQLDirective, includeAstNodes?: boolean): jen.Expr {
     return jen.const.add(this._renderGraphQLTypeIdentifier(directive)).op("=").new.add(this._gql("GraphQLDirective"))
       .call(
         jen.obj(
@@ -946,6 +978,7 @@ class GeneratorContext {
           ...truthify([
             directive.description && jen.prop("description", jen.lit(directive.description)),
             directive.isRepeatable && jen.prop("isRepeatable", jen.true),
+            includeAstNodes && directive.astNode && jen.prop("astNode", renderAstNode(directive.astNode)),
           ]),
         ),
       );
@@ -970,13 +1003,13 @@ class GeneratorContext {
 
   public schemaExprs(
     schema: GraphQLSchema,
-    [types, interfaces, inputFieldDirectives]: ReturnType<typeof GeneratorContext["prepareInterfacesAndInputFieldDirectives"]>,
+    [types, interfaces, inputFieldDirectives, includeAstNodes]: ReturnType<typeof GeneratorContext["prepareInterfacesAndInputFieldDirectives"]>,
   ): jen.Expr[] {
     return [
       ...[
         // render type definitions
         ...types
-          .map((type): [string, jen.Expr] => [type.name, this._renderGraphQLTypeDefinitions(type, interfaces, inputFieldDirectives)])
+          .map((type): [string, jen.Expr] => [type.name, this._renderGraphQLTypeDefinitions(type, interfaces, inputFieldDirectives, includeAstNodes)])
           .sort(compareEntryKey),
 
         // render directive definitions
@@ -1057,11 +1090,11 @@ class GeneratorContext {
 
   public schemaAndTypesExprs(
     schema: GraphQLSchema,
-    [types, interfaces, inputFieldDirectives]: ReturnType<typeof GeneratorContext["prepareInterfacesAndInputFieldDirectives"]>,
+    args: ReturnType<typeof GeneratorContext["prepareInterfacesAndInputFieldDirectives"]>,
   ): jen.Expr[] {
     return [
-      ...this.schemaExprs(schema, [types, interfaces, inputFieldDirectives]),
-      ...this.typesExprs(schema, [types, interfaces, inputFieldDirectives]),
+      ...this.schemaExprs(schema, args),
+      ...this.typesExprs(schema, args),
     ];
   }
 
@@ -1175,7 +1208,7 @@ class GeneratorContext {
       }
     }
 
-    return [types, interfaces, inputFieldDirectives] as const;
+    return [types, interfaces, inputFieldDirectives, options.includeAstNodes] as const;
   }
 }
 
