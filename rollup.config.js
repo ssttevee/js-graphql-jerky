@@ -31,6 +31,7 @@ export default [
             'commander',
             'fs/promises',
             'path',
+            'picomatch',
             'graphql',
             'glob',
             /^just-/,
