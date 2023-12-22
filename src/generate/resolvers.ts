@@ -39,7 +39,7 @@ export async function parseTypeResolvers(typeName: string, glob: string | string
     if (!shouldIgnore(fullpath) && entry.isFile() && entry.name.endsWith(".ts")) {
       for (const [name, reference] of Object.entries(await parseResolverFile(fullpath))) {
         let realName = name;
-        if (realName === "default") {
+        if (realName === "default" && typeof glob === 'string' && glob.endsWith('/*.ts')) {
           realName = basename(fullpath, extname(fullpath))
         }
 
