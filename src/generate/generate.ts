@@ -162,6 +162,7 @@ export interface GenerateOptions {
 	graphqlModuleSpecifier?: string;
 	extMode?: "omit" | "replace" | "keep";
 	includeAstNodes?: boolean;
+	includeSubscriptionFieldResolvers?: boolean;
 }
 
 interface TypeRenderContext {
@@ -189,6 +190,7 @@ class GeneratorContext {
 		undefined
 	>;
 	private _graphqlModuleSpecifier: string;
+	private _includeSubscriptionFieldResolvers: boolean;
 
 	public constructor(options: GenerateOptions = {}) {
 		this._scalarsInfo = options.scalarsInfo ?? {};
@@ -199,6 +201,7 @@ class GeneratorContext {
 		this._graphqlModuleSpecifier = options.graphqlModuleSpecifier ?? "graphql";
 		this._pkgs = new RequiredPackages();
 		this._extMode = options.extMode ?? "omit";
+		this._includeSubscriptionFieldResolvers = options.includeSubscriptionFieldResolvers ?? false;
 	}
 
 	private _gql(name: string): jen.Expr {
@@ -611,7 +614,7 @@ class GeneratorContext {
 							type,
 							inputFieldDirectives,
 							includeAstNodes,
-							type.name === "Subscription",
+							!this._includeSubscriptionFieldResolvers && type.name === "Subscription",
 						),
 					),
 					...truthify([
