@@ -1116,6 +1116,34 @@ class GeneratorContext {
 				),
 		];
 	}
+	
+	private _getGraphQLTypeClass(type: GraphQLType): string {
+		if (type instanceof GraphQLObjectType) {
+			return 'GraphQLObjectType';
+		}
+
+		if (type instanceof GraphQLScalarType) {
+			return 'GraphQLScalarType';
+		}
+
+		if (type instanceof GraphQLInterfaceType) {
+			return 'GraphQLInterfaceType';
+		}
+
+		if (type instanceof GraphQLUnionType) {
+			return 'GraphQLUnionType';
+		}
+
+		if (type instanceof GraphQLInputObjectType) {
+			return 'GraphQLInputObjectType';
+		}
+
+		if (type instanceof GraphQLEnumType) {
+			return 'GraphQLEnumType';
+		}
+
+		throw new Error(`unhandled type: ${type.toString()}`);
+	}
 
 	private _getRenderDefintionFnForType(
 		type: GraphQLType,
@@ -1185,6 +1213,8 @@ class GeneratorContext {
 	): jen.Expr {
 		return jen.const
 			.add(this._renderGraphQLTypeIdentifier(type))
+			.op(":")
+			.id(this._getGraphQLTypeClass(type))
 			.op("=")
 			.add(
 				this._getRenderDefintionFnForType(type)({
