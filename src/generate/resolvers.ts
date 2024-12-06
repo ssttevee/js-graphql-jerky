@@ -1,9 +1,9 @@
-import { basename, extname, join } from "path";
-import fs from "fs/promises";
+import fs from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import { globIterate } from "glob";
 
-import { MatchPattern, createMatcher } from "./matcher.js";
-import { SymbolReference } from "./utils/reference.js";
+import { type MatchPattern, createMatcher } from "./matcher.js";
+import type { SymbolReference } from "./utils/reference.js";
 import ts, { parseModule } from "./utils/typescript.js";
 
 async function parseResolverFile(

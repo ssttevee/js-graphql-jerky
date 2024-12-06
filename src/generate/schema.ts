@@ -1,16 +1,16 @@
-import { join } from "path";
-import fs from "fs/promises";
+import fs from "node:fs/promises";
+import { join } from "node:path";
 import { globIterate } from "glob";
 import {
-	DocumentNode,
-	GraphQLSchema,
+	type DocumentNode,
+	type GraphQLSchema,
 	Source,
 	buildASTSchema,
 	parse as parseDocument,
 	validateSchema,
 } from "graphql";
 
-import { MatchPattern, createMatcher } from "./matcher.js";
+import { type MatchPattern, createMatcher } from "./matcher.js";
 import { mergeDocumentNodes } from "./merge.js";
 
 async function* findSchemaFiles(

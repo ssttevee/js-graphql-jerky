@@ -1,6 +1,6 @@
-import { resolve } from "path";
-import { pathToFileURL } from "url";
-import fs from "fs/promises";
+import fs from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 export async function parseSource(filepath: URL): Promise<ts.SourceFile> {

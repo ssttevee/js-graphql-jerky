@@ -1,13 +1,10 @@
 {
-    "compilerOptions": {
-        "target": "esnext",
-        "module": "node16",
-        "lib": [
-            "esnext",
-            "dom",
-        ],
-        "moduleResolution": "node16",
-        "esModuleInterop": true,
-        "strict": true,
-    },
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "node16",
+		"lib": ["esnext", "dom"],
+		"moduleResolution": "node16",
+		"esModuleInterop": true,
+		"strict": true
+	}
 }

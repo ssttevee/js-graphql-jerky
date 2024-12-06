@@ -1,35 +1,35 @@
 import {
-	ArgumentNode,
-	BooleanValueNode,
-	DefinitionNode,
-	DirectiveNode,
-	DocumentNode,
-	EnumTypeDefinitionNode,
-	EnumValueNode,
-	ExecutableDefinitionNode,
-	FieldDefinitionNode,
-	FloatValueNode,
+	type ArgumentNode,
+	type BooleanValueNode,
+	type DefinitionNode,
+	type DirectiveNode,
+	type DocumentNode,
+	type EnumTypeDefinitionNode,
+	type EnumValueNode,
+	type ExecutableDefinitionNode,
+	type FieldDefinitionNode,
+	type FloatValueNode,
 	GraphQLError,
-	InputObjectTypeDefinitionNode,
-	InputValueDefinitionNode,
-	IntValueNode,
-	InterfaceTypeDefinitionNode,
+	type InputObjectTypeDefinitionNode,
+	type InputValueDefinitionNode,
+	type IntValueNode,
+	type InterfaceTypeDefinitionNode,
 	Kind,
-	ListTypeNode,
-	ListValueNode,
-	Location,
-	NameNode,
-	NamedTypeNode,
-	NonNullTypeNode,
-	ObjectTypeDefinitionNode,
-	ObjectValueNode,
-	ScalarTypeDefinitionNode,
-	SchemaDefinitionNode,
-	StringValueNode,
-	TypeExtensionNode,
-	TypeNode,
-	UnionTypeDefinitionNode,
-	ValueNode,
+	type ListTypeNode,
+	type ListValueNode,
+	type Location,
+	type NameNode,
+	type NamedTypeNode,
+	type NonNullTypeNode,
+	type ObjectTypeDefinitionNode,
+	type ObjectValueNode,
+	type ScalarTypeDefinitionNode,
+	type SchemaDefinitionNode,
+	type StringValueNode,
+	type TypeExtensionNode,
+	type TypeNode,
+	type UnionTypeDefinitionNode,
+	type ValueNode,
 } from "graphql";
 import zip from "just-zip-it";
 
@@ -111,10 +111,9 @@ function namedNodesDict<T extends NamedNode>(
 }
 
 function sortNamedNodes<T extends NamedNode>(nodes: ReadonlyArray<T>): T[] {
-	return Array.from(nodes).sort((
-    { name: { value: a } },
-    { name: { value: b } },
-  ) => a.localeCompare(b));
+	return Array.from(nodes).sort(
+		({ name: { value: a } }, { name: { value: b } }) => a.localeCompare(b),
+	);
 }
 
 function isIntValueNodeEqual(a: IntValueNode, b: IntValueNode): boolean {
@@ -144,8 +143,8 @@ function isEnumValueNodeEqual(a: EnumValueNode, b: EnumValueNode): boolean {
 }
 
 function isListValueNodeEqual(a: ListValueNode, b: ListValueNode): boolean {
-	return zip(a.values as ValueNode[], b.values as ValueNode[]).every(
-		([a, b]) => isValueNodeEqual(a, b),
+	return zip(a.values as ValueNode[], b.values as ValueNode[]).every(([a, b]) =>
+		isValueNodeEqual(a, b),
 	);
 }
 

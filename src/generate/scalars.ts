@@ -1,6 +1,6 @@
 import { getLineAndCharacterOfPosition } from "typescript";
 
-import { SymbolReference } from "./utils/reference.js";
+import type { SymbolReference } from "./utils/reference.js";
 import ts, { parseModule } from "./utils/typescript.js";
 
 type FunctionDeclaration =
@@ -362,7 +362,7 @@ export async function parse(path: string): Promise<Record<string, ScalarInfo>> {
 			? {
 					module: source.fileName,
 					symbol: name,
-			  }
+				}
 			: reconcileScalarType(
 					name,
 					[
@@ -371,7 +371,7 @@ export async function parse(path: string): Promise<Record<string, ScalarInfo>> {
 						fnsInfo?.parseLiteralFunc?.declaration?.type,
 					],
 					source,
-			  );
+				);
 		if (type) {
 			if (type.module) {
 				type.module = new URL(type.module, source.fileName).toString();

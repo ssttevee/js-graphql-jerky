@@ -1,6 +1,6 @@
 import { jen } from "jennifer-js";
 
-import { RequiredPackages } from "./packages.js";
+import type { RequiredPackages } from "./packages.js";
 
 export interface SymbolReference {
 	module?: string;

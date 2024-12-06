@@ -1,36 +1,39 @@
-import path from "path";
-import { fileURLToPath } from "url";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
-	ASTNode,
-	ConstArgumentNode,
+	type ASTNode,
+	type ConstArgumentNode,
 	DirectiveLocation,
-	GraphQLArgument,
+	type GraphQLArgument,
 	GraphQLDirective,
 	GraphQLEnumType,
-	GraphQLField,
-	GraphQLInputField,
+	type GraphQLField,
+	type GraphQLInputField,
 	GraphQLInputObjectType,
 	GraphQLInterfaceType,
 	GraphQLList,
-	GraphQLNamedType,
+	type GraphQLNamedType,
 	GraphQLNonNull,
 	GraphQLObjectType,
 	GraphQLScalarType,
-	GraphQLSchema,
-	GraphQLType,
+	type GraphQLSchema,
+	type GraphQLType,
 	GraphQLUnionType,
 	Kind,
-	ValueNode,
+	type ValueNode,
 	getNamedType,
 	getNullableType,
 } from "graphql";
-import jen, { Expr } from "jennifer-js";
+import jen, { type Expr } from "jennifer-js";
 import format from "jennifer-js/format";
 import partition from "just-partition";
 import pascalCase from "just-pascal-case";
 
 import { RequiredPackages } from "./utils/packages.js";
-import { SymbolReference, renderSymbolReference } from "./utils/reference.js";
+import {
+	type SymbolReference,
+	renderSymbolReference,
+} from "./utils/reference.js";
 
 function compareEntryKey(
 	[a]: [string, ...unknown[]],
@@ -201,7 +204,8 @@ class GeneratorContext {
 		this._graphqlModuleSpecifier = options.graphqlModuleSpecifier ?? "graphql";
 		this._pkgs = new RequiredPackages();
 		this._extMode = options.extMode ?? "omit";
-		this._includeSubscriptionFieldResolvers = options.includeSubscriptionFieldResolvers ?? false;
+		this._includeSubscriptionFieldResolvers =
+			options.includeSubscriptionFieldResolvers ?? false;
 	}
 
 	private _gql(name: string): jen.Expr {
@@ -236,8 +240,8 @@ class GeneratorContext {
 				(type instanceof GraphQLEnumType
 					? "Enum"
 					: type instanceof GraphQLDirective
-					  ? "Directive"
-					  : "Type"),
+						? "Directive"
+						: "Type"),
 		);
 	}
 
@@ -614,7 +618,8 @@ class GeneratorContext {
 							type,
 							inputFieldDirectives,
 							includeAstNodes,
-							!this._includeSubscriptionFieldResolvers && type.name === "Subscription",
+							!this._includeSubscriptionFieldResolvers &&
+								type.name === "Subscription",
 						),
 					),
 					...truthify([
@@ -662,7 +667,7 @@ class GeneratorContext {
 								),
 							),
 						),
-				  ]
+					]
 				: []),
 		];
 	}
@@ -1116,30 +1121,30 @@ class GeneratorContext {
 				),
 		];
 	}
-	
+
 	private _getGraphQLTypeClass(type: GraphQLType): string {
 		if (type instanceof GraphQLObjectType) {
-			return 'GraphQLObjectType';
+			return "GraphQLObjectType";
 		}
 
 		if (type instanceof GraphQLScalarType) {
-			return 'GraphQLScalarType';
+			return "GraphQLScalarType";
 		}
 
 		if (type instanceof GraphQLInterfaceType) {
-			return 'GraphQLInterfaceType';
+			return "GraphQLInterfaceType";
 		}
 
 		if (type instanceof GraphQLUnionType) {
-			return 'GraphQLUnionType';
+			return "GraphQLUnionType";
 		}
 
 		if (type instanceof GraphQLInputObjectType) {
-			return 'GraphQLInputObjectType';
+			return "GraphQLInputObjectType";
 		}
 
 		if (type instanceof GraphQLEnumType) {
-			return 'GraphQLEnumType';
+			return "GraphQLEnumType";
 		}
 
 		throw new Error(`unhandled type: ${type.toString()}`);
@@ -1381,7 +1386,7 @@ class GeneratorContext {
 										"query",
 										this._renderGraphQLTypeIdentifier(queryType),
 									),
-							  ]
+								]
 							: []),
 						...(mutationType
 							? [
@@ -1389,7 +1394,7 @@ class GeneratorContext {
 										"mutation",
 										this._renderGraphQLTypeIdentifier(mutationType),
 									),
-							  ]
+								]
 							: []),
 						...(subscriptionType
 							? [
@@ -1397,7 +1402,7 @@ class GeneratorContext {
 										"subscription",
 										this._renderGraphQLTypeIdentifier(subscriptionType),
 									),
-							  ]
+								]
 							: []),
 						jen.prop(
 							"types",
