@@ -1,6 +1,6 @@
 {
 	"name": "graphql-jerky",
-	"version": "1.0.7",
+	"version": "1.0.8",
 	"description": "Jerky is a schema-first static graphql schema lightweight code generator.",
 	"type": "module",
 	"bin": "./build/bin/jerky.cjs",
@@ -31,6 +31,8 @@
 		"rollup-plugin-dts": "^5.3.0",
 		"tslib": "^2.5.3"
 	},
-	"files": ["build"],
+	"files": [
+		"build"
+	],
 	"license": "MIT"
 }
