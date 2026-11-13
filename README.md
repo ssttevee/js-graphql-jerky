@@ -31,6 +31,9 @@ By default, the working directory is searched recursively for `*.graphql` files.
 All of which are combined into a single schema and rendered to `schema_gen.ts`
 in the same directory.
 
+Jerky reads the schema files and the resolver files in the order of their
+paths. Thus, the output is the same on all platforms and file systems.
+
 A path to a directory or file can be passed as the first parameter to limit to
 scope of the search.
 

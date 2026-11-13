@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
-import { basename, extname, join } from "node:path";
-import { globIterate } from "glob";
+import { basename, extname, posix } from "node:path";
+import { glob as globFiles } from "glob";
 
 import { type MatchPattern, createMatcher } from "./matcher.js";
+import { comparePaths, globOptions, toPosixPath } from "./utils/paths.js";
 import type { SymbolReference } from "./utils/reference.js";
 import ts, { parseModule } from "./utils/typescript.js";
 
@@ -43,35 +44,37 @@ export async function parseTypeResolvers(
 ): Promise<Record<string, SymbolReference>> {
 	const shouldIgnore = createMatcher(ignore);
 	const result: Record<string, SymbolReference> = {};
-	for await (const entry of globIterate(glob, { withFileTypes: true })) {
-		const fullpath = entry.fullpath();
-		if (
-			!shouldIgnore(fullpath) &&
-			entry.isFile() &&
-			entry.name.endsWith(".ts")
-		) {
-			for (const [name, reference] of Object.entries(
-				await parseResolverFile(fullpath),
-			)) {
-				let realName = name;
-				if (
-					realName === "default" &&
-					typeof glob === "string" &&
-					glob.endsWith("/*.ts")
-				) {
-					realName = basename(fullpath, extname(fullpath));
-				}
-
-				if (realName in result) {
-					console.warn(
-						`WARNING: Duplicate resolver name: ${
-							typeName ? `${typeName}.` : ""
-						}${name} in ${fullpath} and ${result[name].module}`,
-					);
-				}
-
-				result[realName] = reference;
+	// NOTE: sort the files so that the result (and the warnings) do not change
+	// with the order in which the file system returns entries.
+	const fullpaths = (
+		await globFiles(glob, { ...globOptions, withFileTypes: true })
+	)
+		.filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+		.map((entry) => toPosixPath(entry.fullpath()))
+		.filter((fullpath) => !shouldIgnore(fullpath))
+		.sort(comparePaths);
+	for (const fullpath of fullpaths) {
+		for (const [name, reference] of Object.entries(
+			await parseResolverFile(fullpath),
+		)) {
+			let realName = name;
+			if (
+				realName === "default" &&
+				typeof glob === "string" &&
+				toPosixPath(glob).endsWith("/*.ts")
+			) {
+				realName = basename(fullpath, extname(fullpath));
 			}
+
+			if (realName in result) {
+				console.warn(
+					`WARNING: Duplicate resolver name: ${
+						typeName ? `${typeName}.` : ""
+					}${realName} in ${fullpath} and ${result[realName].module}`,
+				);
+			}
+
+			result[realName] = reference;
 		}
 	}
 
@@ -91,8 +94,9 @@ export async function parse(
 
 	const shouldIgnore = createMatcher(ignore);
 
-	for await (const name of await fs.readdir(dirpath)) {
-		const file = join(dirpath, name);
+	const names = (await fs.readdir(dirpath)).sort(comparePaths);
+	for (const name of names) {
+		const file = posix.join(toPosixPath(dirpath), name);
 		const entry = await fs.stat(file);
 		if (entry.isDirectory()) {
 			out[name] = await parseTypeResolvers(name, `${file}/*.ts`, shouldIgnore);
