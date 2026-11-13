@@ -34,6 +34,27 @@ in the same directory.
 A path to a directory or file can be passed as the first parameter to limit to
 scope of the search.
 
+### Type extensions
+
+Type extensions (`extend type`, `extend interface`, `extend union`,
+`extend enum`, `extend input` and `extend scalar`) are merged into the type
+that they extend. The extension and the definition can be in different files,
+in any order.
+
+```gql
+# user.graphql
+type Query {
+  me: User
+}
+
+# post.graphql
+extend type Query {
+  posts: [Post!]!
+}
+```
+
+An extension of a type that is not defined causes an error.
+
 ### Options
 
 #### --graphql
