@@ -6,6 +6,7 @@ import {
   GraphQLObjectType,
   GraphQLSchema,
   GraphQLString,
+  specifiedDirectives,
 } from "graphql";
 import { appearsIn, friends, secretBackstory } from "./resolvers/Character.ts";
 import { droid, hero, human } from "./resolvers/Query.ts";
@@ -168,7 +169,7 @@ const QueryType: GraphQLObjectType = new GraphQLObjectType({
 const schema = new GraphQLSchema({
   query: QueryType,
   types: [CharacterType, DroidType, EpisodeEnum, HumanType, QueryType],
-  directives: [],
+  directives: [...specifiedDirectives],
 });
 export default schema;
 const setTypename = <T>(v: T, t: string): T => {

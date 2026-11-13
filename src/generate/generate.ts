@@ -1406,9 +1406,12 @@ class GeneratorContext {
 								...types.map((type) => this._renderGraphQLTypeIdentifier(type)),
 							),
 						),
+						// graphql-js adds the built-in directives only when the
+						// directives list is not given, so include them explicitly.
 						jen.prop(
 							"directives",
 							jen.array(
+								jen.spread(this._gql("specifiedDirectives")),
 								...Array.from(schema.getDirectives())
 									.filter((d) => !isBuiltInDirective(d.name))
 									.map((d) => this._renderGraphQLTypeIdentifier(d)),
