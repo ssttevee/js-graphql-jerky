@@ -31,6 +31,7 @@ import partition from "just-partition";
 import pascalCase from "just-pascal-case";
 
 import { RequiredPackages } from "./utils/packages.js";
+import { toPosixPath } from "./utils/paths.js";
 import {
 	type SymbolReference,
 	renderSymbolReference,
@@ -40,14 +41,14 @@ function compareEntryKey(
 	[a]: [string, ...unknown[]],
 	[b]: [string, ...unknown[]],
 ): number {
-	return a.localeCompare(b);
+	return a.localeCompare(b, "en");
 }
 
 function compareName<T extends { name: string }>(
 	{ name: a }: T,
 	{ name: b }: T,
 ): number {
-	return a.localeCompare(b);
+	return a.localeCompare(b, "en");
 }
 
 const PRIMITIVE_TYPES = new Set(["ID", "Int", "Float", "String", "Boolean"]);
@@ -81,8 +82,9 @@ function renderImports(
 				mod = fileURLToPath(mod);
 			}
 
-			if (mod.startsWith("/")) {
-				mod = path.relative(base, mod);
+			if (path.isAbsolute(mod)) {
+				// NOTE: module specifiers always use forward slashes, even on Windows.
+				mod = toPosixPath(path.relative(base, mod));
 				if (!mod.startsWith(".")) {
 					mod = `./${mod}`;
 				}
@@ -102,8 +104,8 @@ function renderImports(
 					...Array.from(symbols)
 						.sort(
 							(a, b) =>
-								a.localeCompare(b) ||
-								importAlias(a).localeCompare(importAlias(b)),
+								a.localeCompare(b, "en") ||
+								importAlias(a).localeCompare(importAlias(b), "en"),
 						)
 						.map((symbol) =>
 							symbol in aliases
@@ -1504,13 +1506,13 @@ class GeneratorContext {
 		outfile: string,
 		renderStatements: (this: GeneratorContext) => jen.Expr[],
 	): string {
-		const base = outfile.startsWith("/") ? outfile : path.resolve(outfile);
+		const base = path.resolve(outfile);
 
 		const statements = renderStatements.call(this);
 
 		const [localImports, externalImports] = partition(
 			Object.entries(this._pkgs.requires),
-			([pkg]) => pkg.startsWith("/"),
+			([pkg]) => path.isAbsolute(pkg),
 		);
 
 		return format(

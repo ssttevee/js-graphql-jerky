@@ -122,7 +122,8 @@ function namedNodesDict<T extends NamedNode>(
 
 function sortNamedNodes<T extends NamedNode>(nodes: ReadonlyArray<T>): T[] {
 	return Array.from(nodes).sort(
-		({ name: { value: a } }, { name: { value: b } }) => a.localeCompare(b),
+		({ name: { value: a } }, { name: { value: b } }) =>
+			a.localeCompare(b, "en"),
 	);
 }
 

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import { join } from "node:path";
-import { globIterate } from "glob";
+import { posix } from "node:path";
+import { glob as globFiles } from "glob";
 import {
 	type DocumentNode,
 	type GraphQLSchema,
@@ -12,18 +12,34 @@ import {
 
 import { type MatchPattern, createMatcher } from "./matcher.js";
 import { mergeDocumentNodes } from "./merge.js";
+import { comparePaths, globOptions, toPosixPath } from "./utils/paths.js";
 
-async function* findSchemaFiles(
+async function collectSchemaFiles(
 	glob: string | string[],
-): AsyncGenerator<string> {
-	for await (const path of globIterate(glob)) {
+	files: Set<string>,
+): Promise<void> {
+	for (const path of await globFiles(glob, globOptions)) {
 		const entry = await fs.stat(path);
 		if (entry.isFile()) {
-			yield path;
+			files.add(toPosixPath(path));
 		} else if (entry.isDirectory()) {
-			yield* findSchemaFiles(join(path, "**/*.graphql"));
+			await collectSchemaFiles(
+				posix.join(toPosixPath(path), "**/*.graphql"),
+				files,
+			);
 		}
 	}
+}
+
+/**
+ * Finds the schema files and sorts them by path. The order of the files sets
+ * the order of the merged definitions and fields, so it must not change with
+ * the file system or the platform.
+ */
+async function findSchemaFiles(glob: string | string[]): Promise<string[]> {
+	const files = new Set<string>();
+	await collectSchemaFiles(glob, files);
+	return Array.from(files).sort(comparePaths);
 }
 
 export async function parse(
@@ -32,7 +48,7 @@ export async function parse(
 ): Promise<GraphQLSchema> {
 	const shouldIgnore = createMatcher(ignore);
 	const documentNodes: DocumentNode[] = [];
-	for await (const entry of findSchemaFiles(glob)) {
+	for (const entry of await findSchemaFiles(glob)) {
 		if (shouldIgnore(entry)) {
 			continue;
 		}
