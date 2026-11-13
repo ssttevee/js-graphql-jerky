@@ -26,10 +26,14 @@ import {
 	type ScalarTypeDefinitionNode,
 	type SchemaDefinitionNode,
 	type StringValueNode,
+	type TypeDefinitionNode,
 	type TypeExtensionNode,
 	type TypeNode,
+	type TypeSystemExtensionNode,
 	type UnionTypeDefinitionNode,
 	type ValueNode,
+	isTypeDefinitionNode,
+	isTypeExtensionNode,
 } from "graphql";
 import zip from "just-zip-it";
 
@@ -95,8 +99,14 @@ function setTraceToSchema(err: GraphQLError, name: string, loc?: Location) {
 
 type MergableDefinitionNode = Exclude<
 	DefinitionNode,
-	ExecutableDefinitionNode | SchemaDefinitionNode | TypeExtensionNode
+	ExecutableDefinitionNode | SchemaDefinitionNode | TypeSystemExtensionNode
 >;
+
+function isMergableDefinitionNode(
+	node: DefinitionNode,
+): node is MergableDefinitionNode {
+	return isTypeDefinitionNode(node) || node.kind === Kind.DIRECTIVE_DEFINITION;
+}
 
 interface NamedNode {
 	readonly name: NameNode;
@@ -302,11 +312,7 @@ function mergeFieldDefinitionNodes(
 
 				fields[f.name.value] = {
 					...prev,
-					directives: mergeDirectiveNodes(
-						`${name}.${f.name.value}`,
-						prev.directives,
-						f.directives,
-					),
+					directives: mergeDirectiveNodes(prev.directives, f.directives),
 				};
 			} else {
 				fields[f.name.value] = f;
@@ -355,11 +361,7 @@ function mergeInputValueDefinitionNodes(
 
 				fields[f.name.value] = {
 					...prev,
-					directives: mergeDirectiveNodes(
-						`${name}.${f.name.value}`,
-						prev.directives,
-						f.directives,
-					),
+					directives: mergeDirectiveNodes(prev.directives, f.directives),
 				};
 			} else {
 				fields[f.name.value] = f;
@@ -385,31 +387,27 @@ function mergeNamedNodes<Node extends NamedNode>(
 }
 
 function mergeDirectiveNodes<Node extends DirectiveNode>(
-	name: string,
 	a: ReadonlyArray<Node> | undefined,
 	b: ReadonlyArray<Node> | undefined,
 ): ReadonlyArray<Node> {
-	const directives = namedNodesDict(a);
-	if (b) {
-		for (const d of b) {
-			if (
-				d.name.value in directives &&
-				!isArgumentNodesEqual(directives[d.name.value].arguments, d.arguments)
-			) {
-				throw setTraceToSchema(
-					new GraphQLError(
-						`Cannot merge duplicate directive with different arguments: ${name} @${d.name.value}`,
-					),
-					`${name} @${d.name.value}`,
-					d.loc,
-				);
-			}
-
-			directives[d.name.value] = d;
+	// Keep each occurrence, because a repeatable directive can occur more than
+	// once. Skip only an occurrence that is identical to one that is already
+	// applied. buildASTSchema rejects a non-repeatable directive that occurs
+	// more than once.
+	const directives = Array.from(a ?? []);
+	for (const d of b ?? []) {
+		if (
+			!directives.some(
+				(prev) =>
+					prev.name.value === d.name.value &&
+					isArgumentNodesEqual(prev.arguments, d.arguments),
+			)
+		) {
+			directives.push(d);
 		}
 	}
 
-	return Object.values(directives);
+	return directives;
 }
 
 function mergeScalarTypeDefinitionNodes(
@@ -428,8 +426,10 @@ function mergeScalarTypeDefinitionNodes(
 
 	return {
 		kind: Kind.SCALAR_TYPE_DEFINITION,
+		loc: a.loc,
 		name: a.name,
-		directives: mergeDirectiveNodes(a.name.value, a.directives, b.directives),
+		description: a.description || b.description,
+		directives: mergeDirectiveNodes(a.directives, b.directives),
 	};
 }
 
@@ -443,7 +443,7 @@ function mergeObjectTypeDefinitionNodes(
 		name: a.name,
 		description: a.description || b.description,
 		interfaces: mergeNamedNodes(a.interfaces, b.interfaces),
-		directives: mergeDirectiveNodes(a.name.value, a.directives, b.directives),
+		directives: mergeDirectiveNodes(a.directives, b.directives),
 		fields: mergeFieldDefinitionNodes(a.name.value, a.fields, b.fields),
 	};
 }
@@ -458,7 +458,7 @@ function mergeInterfaceTypeDefinitionNodes(
 		name: a.name,
 		description: a.description || b.description,
 		interfaces: mergeNamedNodes(a.interfaces, b.interfaces),
-		directives: mergeDirectiveNodes(a.name.value, a.directives, b.directives),
+		directives: mergeDirectiveNodes(a.directives, b.directives),
 		fields: mergeFieldDefinitionNodes(a.name.value, a.fields, b.fields),
 	};
 }
@@ -472,7 +472,7 @@ function mergeUnionTypeDefinitionNodes(
 		loc: a.loc,
 		name: a.name,
 		description: a.description || b.description,
-		directives: mergeDirectiveNodes(a.name.value, a.directives, b.directives),
+		directives: mergeDirectiveNodes(a.directives, b.directives),
 		types: mergeNamedNodes(a.types, b.types),
 	};
 }
@@ -487,9 +487,9 @@ function mergeEnumTypeDefinitionNodes(
 			if (v.name.value in values) {
 				throw setTraceToSchema(
 					new GraphQLError(
-						`Cannot merge duplicate enum value: ${v.name.value}.${v.name.value}`,
+						`Cannot merge duplicate enum value: ${a.name.value}.${v.name.value}`,
 					),
-					`${v.name.value}.${v.name.value}`,
+					`${a.name.value}.${v.name.value}`,
 					v.loc,
 				);
 			}
@@ -503,7 +503,7 @@ function mergeEnumTypeDefinitionNodes(
 		loc: a.loc,
 		name: a.name,
 		description: a.description || b.description,
-		directives: mergeDirectiveNodes(a.name.value, a.directives, b.directives),
+		directives: mergeDirectiveNodes(a.directives, b.directives),
 		values: Object.values(values),
 	};
 }
@@ -517,8 +517,90 @@ function mergeInputObjectTypeDefinitionNodes(
 		loc: a.loc,
 		name: a.name,
 		description: a.description || b.description,
-		directives: mergeDirectiveNodes(a.name.value, a.directives, b.directives),
+		directives: mergeDirectiveNodes(a.directives, b.directives),
 		fields: mergeInputValueDefinitionNodes(a.name.value, a.fields, b.fields),
+	};
+}
+
+const EXTENSION_DEFINITION_KINDS: Record<
+	TypeExtensionNode["kind"],
+	TypeDefinitionNode["kind"]
+> = {
+	[Kind.SCALAR_TYPE_EXTENSION]: Kind.SCALAR_TYPE_DEFINITION,
+	[Kind.OBJECT_TYPE_EXTENSION]: Kind.OBJECT_TYPE_DEFINITION,
+	[Kind.INTERFACE_TYPE_EXTENSION]: Kind.INTERFACE_TYPE_DEFINITION,
+	[Kind.UNION_TYPE_EXTENSION]: Kind.UNION_TYPE_DEFINITION,
+	[Kind.ENUM_TYPE_EXTENSION]: Kind.ENUM_TYPE_DEFINITION,
+	[Kind.INPUT_OBJECT_TYPE_EXTENSION]: Kind.INPUT_OBJECT_TYPE_DEFINITION,
+};
+
+function mergeTypeDefinitionNodes(
+	a: TypeDefinitionNode,
+	b: TypeDefinitionNode,
+): TypeDefinitionNode {
+	switch (b.kind) {
+		case Kind.SCALAR_TYPE_DEFINITION:
+			return mergeScalarTypeDefinitionNodes(a as ScalarTypeDefinitionNode, b);
+		case Kind.OBJECT_TYPE_DEFINITION:
+			return mergeObjectTypeDefinitionNodes(a as ObjectTypeDefinitionNode, b);
+		case Kind.INTERFACE_TYPE_DEFINITION:
+			return mergeInterfaceTypeDefinitionNodes(
+				a as InterfaceTypeDefinitionNode,
+				b,
+			);
+		case Kind.UNION_TYPE_DEFINITION:
+			return mergeUnionTypeDefinitionNodes(a as UnionTypeDefinitionNode, b);
+		case Kind.ENUM_TYPE_DEFINITION:
+			return mergeEnumTypeDefinitionNodes(a as EnumTypeDefinitionNode, b);
+		case Kind.INPUT_OBJECT_TYPE_DEFINITION:
+			return mergeInputObjectTypeDefinitionNodes(
+				a as InputObjectTypeDefinitionNode,
+				b,
+			);
+	}
+}
+
+function applyTypeExtensionNode(
+	definitions: Record<string, MergableDefinitionNode>,
+	extension: TypeExtensionNode,
+) {
+	const name = extension.name.value;
+	const definition = definitions[name];
+	if (!definition) {
+		throw setTraceToSchema(
+			new GraphQLError(`Cannot extend type that is not defined: ${name}`),
+			name,
+			extension.loc,
+		);
+	}
+
+	const kind = EXTENSION_DEFINITION_KINDS[extension.kind];
+	if (definition.kind !== kind) {
+		throw setTraceToSchema(
+			new GraphQLError(
+				`Cannot extend ${definition.kind} with ${extension.kind}: ${name}`,
+			),
+			name,
+			extension.loc,
+		);
+	}
+
+	// An extension has the same shape as its definition, without a description.
+	const merged = mergeTypeDefinitionNodes(definition, {
+		...extension,
+		kind,
+		directives: undefined,
+	} as TypeDefinitionNode);
+
+	// The directives of an extension are added to the directives of the type.
+	// buildASTSchema rejects a non-repeatable directive that occurs more than
+	// once.
+	definitions[name] = {
+		...merged,
+		directives: [
+			...(definition.directives ?? []),
+			...(extension.directives ?? []),
+		],
 	};
 }
 
@@ -526,20 +608,18 @@ export function mergeDocumentNodes(
 	documentNodes: DocumentNode[],
 ): DocumentNode {
 	const definitions: Record<string, MergableDefinitionNode> = {};
+	const extensions: TypeExtensionNode[] = [];
 	for (const documentNode of documentNodes) {
 		for (const definition of documentNode.definitions) {
-			switch (definition.kind) {
-				case Kind.SCHEMA_DEFINITION:
-				case Kind.SCHEMA_EXTENSION:
-				case Kind.OPERATION_DEFINITION:
-				case Kind.FRAGMENT_DEFINITION:
-				case Kind.SCALAR_TYPE_EXTENSION:
-				case Kind.OBJECT_TYPE_EXTENSION:
-				case Kind.INTERFACE_TYPE_EXTENSION:
-				case Kind.UNION_TYPE_EXTENSION:
-				case Kind.ENUM_TYPE_EXTENSION:
-				case Kind.INPUT_OBJECT_TYPE_EXTENSION:
-					throw new Error(`unexpected definition kind: ${definition.kind}`);
+			if (isTypeExtensionNode(definition)) {
+				// Apply extensions after all definitions are known, because an
+				// extension can occur before the definition that it extends.
+				extensions.push(definition);
+				continue;
+			}
+
+			if (!isMergableDefinitionNode(definition)) {
+				throw new Error(`unexpected definition kind: ${definition.kind}`);
 			}
 
 			const prevDefinition = definitions[definition.name.value];
@@ -584,52 +664,15 @@ export function mergeDocumentNodes(
 				);
 			}
 
-			switch (definition.kind) {
-				case Kind.SCALAR_TYPE_DEFINITION:
-					definitions[definition.name.value] = mergeScalarTypeDefinitionNodes(
-						prevDefinition as ScalarTypeDefinitionNode,
-						definition,
-					);
-					break;
-
-				case Kind.OBJECT_TYPE_DEFINITION:
-					definitions[definition.name.value] = mergeObjectTypeDefinitionNodes(
-						prevDefinition as ObjectTypeDefinitionNode,
-						definition,
-					);
-					break;
-
-				case Kind.INTERFACE_TYPE_DEFINITION:
-					definitions[definition.name.value] =
-						mergeInterfaceTypeDefinitionNodes(
-							prevDefinition as InterfaceTypeDefinitionNode,
-							definition,
-						);
-					break;
-
-				case Kind.UNION_TYPE_DEFINITION:
-					definitions[definition.name.value] = mergeUnionTypeDefinitionNodes(
-						prevDefinition as UnionTypeDefinitionNode,
-						definition,
-					);
-					break;
-
-				case Kind.ENUM_TYPE_DEFINITION:
-					definitions[definition.name.value] = mergeEnumTypeDefinitionNodes(
-						prevDefinition as EnumTypeDefinitionNode,
-						definition,
-					);
-					break;
-
-				case Kind.INPUT_OBJECT_TYPE_DEFINITION:
-					definitions[definition.name.value] =
-						mergeInputObjectTypeDefinitionNodes(
-							prevDefinition as InputObjectTypeDefinitionNode,
-							definition,
-						);
-					break;
-			}
+			definitions[definition.name.value] = mergeTypeDefinitionNodes(
+				prevDefinition as TypeDefinitionNode,
+				definition as TypeDefinitionNode,
+			);
 		}
+	}
+
+	for (const extension of extensions) {
+		applyTypeExtensionNode(definitions, extension);
 	}
 
 	return {

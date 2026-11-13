@@ -23,6 +23,7 @@ import {
 	type ValueNode,
 	getNamedType,
 	getNullableType,
+	specifiedDirectives,
 } from "graphql";
 import jen, { type Expr } from "jennifer-js";
 import format from "jennifer-js/format";
@@ -130,15 +131,8 @@ function renderAstNode(astNode: ASTNode): jen.Expr {
 
 function isBuiltInDirective(name: string): boolean {
 	// https://spec.graphql.org/draft/#sec-Type-System.Directives.Built-in-Directives
-	switch (name) {
-		case "deprecated":
-		case "skip":
-		case "include":
-		case "specifiedBy":
-			return true;
-	}
-
-	return false;
+	// Use the list from graphql, because new versions add directives (for example, @oneOf).
+	return specifiedDirectives.some((d) => d.name === name);
 }
 
 function truthify<T>(arr: Array<T | undefined | null | 0 | false | "">): T[] {
