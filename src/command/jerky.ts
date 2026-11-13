@@ -132,7 +132,9 @@ async function normalizeOutfile(
 		await fs.writeFile(outfile, generator.generate(outfile));
 	}
 })().catch((err) => {
-	console.error(err.stack);
+	process.exitCode = 1;
+
+	console.error(err?.stack ?? err);
 	console.log();
 
 	if (
