@@ -1,6 +1,6 @@
 {
 	"name": "graphql-jerky",
-	"version": "1.0.10",
+	"version": "1.0.11",
 	"description": "Jerky is a schema-first static graphql schema lightweight code generator.",
 	"type": "module",
 	"bin": {
