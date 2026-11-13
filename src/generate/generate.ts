@@ -319,7 +319,11 @@ class GeneratorContext {
 		let resolveFn: jen.Expr | undefined;
 		if (!noresolver) {
 			let resolver = this._resolversInfo[type.name]?.[f.name];
-			if (type instanceof GraphQLObjectType && !resolver) {
+			if (
+				(type instanceof GraphQLObjectType ||
+					type instanceof GraphQLInterfaceType) &&
+				!resolver
+			) {
 				// try to find resolver in interface in the declaration order
 				for (const iface of type.getInterfaces()) {
 					resolver = this._resolversInfo[iface.name]?.[f.name];
@@ -774,6 +778,7 @@ class GeneratorContext {
 		type: GraphQLInterfaceType,
 		{ inputFieldDirectives, includeAstNodes }: TypeRenderContext,
 	): jen.Expr {
+		const typeInterfaces = type.getInterfaces();
 		return jen.new
 			.add(this._gql("GraphQLInterfaceType"))
 			.call(
@@ -790,6 +795,17 @@ class GeneratorContext {
 					...truthify([
 						type.description &&
 							jen.prop("description", jen.lit(type.description)),
+						typeInterfaces.length &&
+							jen.prop(
+								"interfaces",
+								jen.arrow().arr(
+									// do not sort interfaces, the declaration order may be important
+									...typeInterfaces.map(
+										this._renderGraphQLTypeIdentifier,
+										this,
+									),
+								),
+							),
 						includeAstNodes &&
 							type.astNode &&
 							jen.prop("astNode", renderAstNode(type.astNode)),
