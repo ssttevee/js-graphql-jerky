@@ -3,7 +3,9 @@
 	"version": "1.0.9",
 	"description": "Jerky is a schema-first static graphql schema lightweight code generator.",
 	"type": "module",
-	"bin": "./build/bin/jerky.cjs",
+	"bin": {
+		"graphql-jerky": "build/bin/jerky.cjs"
+	},
 	"types": "./build/lib.d.ts",
 	"module": "./build/lib.mjs",
 	"main": "./build/lib.cjs",
